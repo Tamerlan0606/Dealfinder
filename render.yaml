@@ -23,7 +23,7 @@ services:
         value: "587"
       - key: SMTP_USER
         sync: false
-      - key: SMTP_PASS
+      - key: SMTP_PASSWORD
         sync: false
       - key: SMTP_FROM
         sync: false

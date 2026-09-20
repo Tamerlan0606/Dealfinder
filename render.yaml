@@ -4,6 +4,7 @@ services:
     runtime: python
     buildCommand: pip install -r requirements.txt
     startCommand: python -m uvicorn run:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
     disk:
       name: dealfinder-data
       mountPath: /data
@@ -24,7 +25,7 @@ services:
       - key: REFRESH_SECONDS
         value: "3600"
       - key: AUTO_REFRESH
-        value: "true"
+        value: "false"
       - key: AUTO_REVIEW
         value: "true"
       - key: AUTO_REVIEW_LIMIT

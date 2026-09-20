@@ -119,6 +119,17 @@ def _url(item,ext):
         if "url" in str(k).lower() and isinstance(v,str) and v.startswith("http"):return v
     return f"https://zakupki.gov.ru/epz/order/notice/ok20/view/common-info.html?regNumber={ext}"
 
+def _city(item,blob):
+    keys=("city","region","regionname","deliveryplace","deliveryaddress","location","place","delivery_places")
+    for k,v in _walk_values(item):
+        nk=_norm_key(k)
+        if any(x in nk for x in keys):
+            s=_text(v).strip()
+            if s and len(s)<=300:return s
+    for r in REGIONS:
+        if r in blob:return r
+    return ""
+
 def _type(item,blob):
     for k,v in _walk_values(item):
         if _norm_key(k) in {"purchasetype","law","fz","procurementtype"}:return str(v)
@@ -233,7 +244,7 @@ def refresh():
                         db.execute("""INSERT INTO buyers(source,external_id,title,description,url,contact,budget_rub,city,advance_pct,advance_rub,deadline,procurement_type,sro_required,experience_required,security_rub,fit_status,fit_reasons)
 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(source,external_id) DO UPDATE SET title=excluded.title,description=excluded.description,url=excluded.url,budget_rub=excluded.budget_rub,advance_pct=excluded.advance_pct,advance_rub=excluded.advance_rub,deadline=excluded.deadline,procurement_type=excluded.procurement_type,sro_required=excluded.sro_required,experience_required=excluded.experience_required,security_rub=excluded.security_rub,fit_status=excluded.fit_status,fit_reasons=excluded.fit_reasons""",
-                            ("gosplan_v2"+endpoint,ext,_title(item),blob[:6000],_url(item,ext),"",price,"",adv,(price*adv/100 if adv is not None else None),deadline,_type(item,blob),_sro(blob),_experience(blob),sec,status,reason));loaded+=1
+                            ("gosplan_v2"+endpoint,ext,_title(item),_text(item)[:6000],_url(item,ext),"",price,_city(item,blob),adv,(price*adv/100 if adv is not None else None),deadline,_type(item,blob),_sro(blob),_experience(blob),sec,status,reason));loaded+=1
                     if len(items)<10:break
         db.commit()
         if loaded==0:

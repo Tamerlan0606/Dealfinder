@@ -28,7 +28,7 @@ services:
       - key: AUTO_REVIEW
         value: "true"
       - key: AUTO_REVIEW_LIMIT
-        value: "5"
+        value: "20"
       - key: DEAL_BID_DISCOUNT_PCT
         value: "5"
       - key: DEAL_TAX_PCT

@@ -1,4 +1,4 @@
-import os, html, json
+import os, html, json, threading, time
 from fastapi import FastAPI, Query
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
@@ -24,6 +24,19 @@ class Match(BaseModel):
 @app.on_event("startup")
 def startup():
     connect(DB).close()
+    if os.getenv("AUTO_REFRESH","true").lower()=="true":
+        threading.Thread(target=_background_refresh, daemon=True).start()
+
+def _background_refresh():
+    time.sleep(3)
+    while True:
+        try:
+            result=refresh()
+            if result.get("status")=="ok" and os.getenv("AUTO_REVIEW","true").lower()=="true":
+                review_unknown(DB,int(os.getenv("AUTO_REVIEW_LIMIT","20")))
+        except Exception:
+            pass
+        time.sleep(int(os.getenv("REFRESH_SECONDS","3600")))
 
 @app.get("/api/hot")
 def hot(limit:int=50):
@@ -137,20 +150,20 @@ def outreach(to:str,subject:str,body:str): return send(to,subject,body)
 @app.get("/", response_class=HTMLResponse)
 def dashboard():
     return '''<!doctype html><html lang="ru"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>DealFinder v2-EIS</title><style>
+<title>DealFinder — ТЕХСТРОЙ</title><style>
 body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#f5f5f7;margin:0;color:#111}.wrap{max-width:760px;margin:auto;padding:16px}
 .head{display:flex;justify-content:space-between;align-items:center}.badge{background:#111;color:#fff;padding:6px 10px;border-radius:20px;font-size:12px}
 .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.stat,.card{background:#fff;border-radius:16px;padding:14px;margin-top:10px;box-shadow:0 1px 4px #0001}
 .stat b{display:block;font-size:24px}.card h3{margin:0 0 7px;font-size:17px}.money{font-size:21px;font-weight:700}.muted{color:#777;font-size:13px}
 .btn{display:inline-block;margin-top:10px;background:#111;color:#fff;padding:10px 13px;border-radius:12px;text-decoration:none;border:0}
 .refresh{cursor:pointer}@media(max-width:500px){.grid{grid-template-columns:1fr 1fr}.grid .stat:last-child{grid-column:span 2}}
-</style><div class="wrap"><div class="head"><h1>DealFinder</h1><button class="badge refresh" onclick="refresh()">ОБНОВИТЬ</button></div>
+</style><div class="wrap"><div class="head"><h1>DealFinder <span class="muted">ТЕХСТРОЙ</span></h1><button class="badge refresh" onclick="refresh()">ОБНОВИТЬ</button></div>
 <div class="grid"><div class="stat"><span class="muted">Найдено закупок</span><b id="buyers">—</b></div><div class="stat"><span class="muted">Источники</span><b id="suppliers">—</b></div><div class="stat"><span class="muted">Горячие</span><b id="hot">—</b></div></div>
 <h2>Горячие закупки</h2><div id="list">Загрузка…</div></div>
 <script>
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 async function load(){let s=await fetch('/api/stats').then(r=>r.json());for(let k in s)document.getElementById(k).textContent=s[k];
 let a=await fetch('/api/hot').then(r=>r.json());let el=document.getElementById('list');el.innerHTML=a.length?'':'<div class="card">Пока подходящих закупок нет.</div>';
-a.forEach(x=>{el.innerHTML+=`<div class="card"><h3>${esc(x.title)}</h3><div class="muted">${esc(x.city)} · ${Number(x.budget_rub||0).toLocaleString('ru-RU')} ₽</div><p>${esc((x.description||'').slice(0,400))}</p>${x.url?`<a class="btn" href="${esc(x.url)}" target="_blank">Открыть закупку</a>`:''}</div>`})}
+a.forEach(x=>{const e=x.economics||{};el.innerHTML+=`<div class="card"><h3>ЗАХОДИМ · ${esc(x.title)}</h3><div class="muted">${esc(x.city)} · НМЦК ${Number(x.budget_rub||0).toLocaleString('ru-RU')} ₽ · аванс ${x.advance_pct??'—'}%</div><p>${esc((x.description||'').slice(0,280))}</p><div class="money">Маржа: ${Number(e.margin_rub||0).toLocaleString('ru-RU')} ₽</div><div class="muted">Свои деньги: ${Number(e.own_cash_needed_rub||0).toLocaleString('ru-RU')} ₽ · цена контракта: ${Number(e.contract_price||0).toLocaleString('ru-RU')} ₽</div>${x.deadline?'<div class="muted">Срок подачи: '+esc(x.deadline)+'</div>':''}${x.url?`<a class="btn" href="${esc(x.url)}" target="_blank">Открыть закупку</a>`:''}</div>`})}
 async function refresh(){const r=await fetch('/api/refresh',{method:'POST'});const x=await r.json();if(x.status!=='ok'){alert('Ошибка источника: '+(x.error||'неизвестная ошибка'))}else if(x.loaded===0){alert('Источник ответил, но 0 закупок прошло фильтры. RAW: '+(x.raw||0)+' | страницы: '+(x.pages||0)+' | сервер: '+(x.server||''))}else{alert('Загружено: '+x.loaded)}await load()}load();setInterval(load,60000)
 </script></html>'''

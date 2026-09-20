@@ -11,7 +11,7 @@ from .ingest import refresh
 
 load_dotenv()
 DB=os.getenv("DB_PATH","deals.db")
-app=FastAPI(title="DealFinder Mobile v3-GosPlan")
+app=FastAPI(title="DealFinder Mobile v4-TEKHSTROY")
 
 class Buyer(BaseModel):
     source:str; external_id:str|None=None; title:str; description:str=""; url:str=""; contact:str=""; budget_rub:float|None=None; city:str=""
@@ -28,8 +28,8 @@ def startup():
 def hot(limit:int=50):
     c=connect(DB)
     min_r=float(os.getenv("DEAL_MIN_RUB","10000000")); max_r=float(os.getenv("DEAL_MAX_RUB","90000000"))
-    rows=c.execute("""SELECT * FROM buyers WHERE budget_rub BETWEEN ? AND ?
-                      ORDER BY created_at DESC LIMIT ?""",(min_r,max_r,limit)).fetchall()
+    rows=c.execute("""SELECT * FROM buyers WHERE budget_rub BETWEEN ? AND ? AND fit_status='ЗАХОДИМ' AND advance_pct >= ?
+                      ORDER BY advance_pct DESC, created_at DESC LIMIT ?""",(min_r,max_r,float(os.getenv("DEAL_MIN_ADVANCE_PCT","20")),limit)).fetchall()
     c.close()
     return [dict(r) for r in rows]
 
@@ -45,7 +45,7 @@ def suppliers(limit:int=100):
 
 @app.get("/api/version")
 def version():
-    return {"version":"v3-GosPlan","source":"GosPlan API v2","gosplan":"enabled","manual_refresh":True}
+    return {"version":"v4-TEKHSTROY","source":"GosPlan API v2","gosplan":"enabled","advance_min_pct":float(os.getenv("DEAL_MIN_ADVANCE_PCT","20")),"profile":"ТЕХСТРОЙ","manual_refresh":True}
 
 @app.get("/api/stats")
 def stats():
@@ -53,7 +53,7 @@ def stats():
     buyers=c.execute("SELECT count(*) n FROM buyers").fetchone()["n"]
     suppliers=c.execute("SELECT count(*) n FROM suppliers").fetchone()["n"]
     min_r=float(os.getenv("DEAL_MIN_RUB","10000000")); max_r=float(os.getenv("DEAL_MAX_RUB","90000000"))
-    hot=c.execute("SELECT count(*) n FROM buyers WHERE budget_rub BETWEEN ? AND ?",(min_r,max_r)).fetchone()["n"]
+    hot=c.execute("SELECT count(*) n FROM buyers WHERE budget_rub BETWEEN ? AND ? AND fit_status='ЗАХОДИМ' AND advance_pct >= ?",(min_r,max_r,float(os.getenv("DEAL_MIN_ADVANCE_PCT","20")))).fetchone()["n"]
     c.close()
     return {"buyers":buyers,"suppliers":suppliers,"hot":hot}
 

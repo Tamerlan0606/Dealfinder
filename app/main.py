@@ -31,10 +31,13 @@ def startup():
 _last_bg_error = None
 _last_bg_result = None
 _refresh_lock = threading.Lock()
+_review_lock = threading.Lock()
 
 def _run_review_background(result):
     global _last_bg_result
     if result.get("status") not in ("ok","fallback") or os.getenv("AUTO_REVIEW","true").lower()!="true":
+        return
+    if not _review_lock.acquire(blocking=False):
         return
     try:
         reviewed=review_unknown(DB, int(os.getenv("AUTO_REVIEW_LIMIT","20")))
@@ -45,6 +48,8 @@ def _run_review_background(result):
         current=dict(_last_bg_result or result)
         current["review_error"]=f"{type(e).__name__}: {e}"
         _last_bg_result=current
+    finally:
+        _review_lock.release()
 
 def _background_refresh():
     global _last_bg_error, _last_bg_result
@@ -187,7 +192,7 @@ def api_refresh_get():
 
 @app.get("/api/refresh-status")
 def refresh_status():
-    running = _refresh_lock.locked()
+    running = _refresh_lock.locked() or _review_lock.locked()
     result = _last_bg_result or {}
     return {
         "status": "running" if running else (result.get("status") if result else "idle"),

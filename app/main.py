@@ -1,6 +1,7 @@
 import os, html, json, threading, time
 from fastapi import FastAPI, Query
-from fastapi.responses import HTMLResponse
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from .db import connect
@@ -47,6 +48,7 @@ def _background_refresh():
                 _last_bg_error = result.get("error") or "refresh returned non-ok"
         except Exception as e:
             _last_bg_error = f"{type(e).__name__}: {e}"
+            _last_bg_result = {"status":"error","error":_last_bg_error}
         time.sleep(int(os.getenv("REFRESH_SECONDS","3600")))
 
 def _run_refresh_once():
@@ -141,6 +143,19 @@ def api_refresh():
 @app.get("/api/refresh")
 def api_refresh_get():
     return _run_refresh_once()
+
+@app.get("/api/test-gosplan")
+def test_gosplan():
+    import httpx
+    key=os.getenv("GOSPLAN_API_KEY","").strip()
+    base=os.getenv("GOSPLAN_BASE_URL","https://v2.gosplan.info" if key else "https://v2test.gosplan.info").rstrip("/")
+    headers={"User-Agent":"DealFinder/diagnostic","Accept":"application/json"}
+    if key: headers["X-API-Key"]=key
+    try:
+        r=httpx.get(base+"/fz44/purchases",params={"limit":1,"skip":0},headers=headers,timeout=12,follow_redirects=True)
+        return {"status":"ok" if r.is_success else "error","http_status":r.status_code,"base":base,"body":r.text[:1000]}
+    except Exception as e:
+        return {"status":"error","base":base,"error":f"{type(e).__name__}: {e}"}
 
 @app.get("/api/diagnostics")
 def diagnostics():

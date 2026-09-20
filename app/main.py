@@ -155,26 +155,33 @@ def stats():
     c.close()
     return {"buyers":buyers,"suppliers":suppliers,"hot":hot}
 
-def _manual_refresh():
+def _refresh_worker():
     global _last_bg_error, _last_bg_result
     if not _refresh_lock.acquire(blocking=False):
-        return {"status":"busy","error":"Обновление уже выполняется","last_result":_last_bg_result}
+        return
     try:
+        _last_bg_result={"status":"running","phase":"source"}
+        _last_bg_error=None
         result=refresh()
         _last_bg_result=result
         if result.get("status") in ("ok","fallback"):
             _last_bg_error=None
             if os.getenv("AUTO_REVIEW","true").lower()=="true":
+                _last_bg_result=dict(result, phase="review")
                 threading.Thread(target=_run_review_background,args=(result,),daemon=True).start()
         else:
             _last_bg_error=result.get("error") or "refresh returned non-ok"
-        return result
     except Exception as e:
         _last_bg_error=f"{type(e).__name__}: {e}"
         _last_bg_result={"status":"error","error":_last_bg_error}
-        return _last_bg_result
     finally:
         _refresh_lock.release()
+
+def _manual_refresh():
+    if _refresh_lock.locked():
+        return {"status":"busy","error":"Обновление уже выполняется","last_result":_last_bg_result}
+    threading.Thread(target=_refresh_worker,daemon=True).start()
+    return {"status":"started","message":"Обновление запущено"}
 
 @app.post("/api/refresh")
 def api_refresh():

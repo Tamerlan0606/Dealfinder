@@ -24,7 +24,6 @@ class Match(BaseModel):
 def startup():
     connect(DB).close()
 
-
 @app.get("/api/hot")
 def hot(limit:int=50):
     c=connect(DB)
@@ -107,5 +106,5 @@ const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&g
 async function load(){let s=await fetch('/api/stats').then(r=>r.json());for(let k in s)document.getElementById(k).textContent=s[k];
 let a=await fetch('/api/hot').then(r=>r.json());let el=document.getElementById('list');el.innerHTML=a.length?'':'<div class="card">Пока подходящих закупок нет.</div>';
 a.forEach(x=>{el.innerHTML+=`<div class="card"><h3>${esc(x.title)}</h3><div class="muted">${esc(x.city)} · ${Number(x.budget_rub||0).toLocaleString('ru-RU')} ₽</div><p>${esc((x.description||'').slice(0,400))}</p>${x.url?`<a class="btn" href="${esc(x.url)}" target="_blank">Открыть закупку</a>`:''}</div>`})}
-async function refresh(){const r=await fetch('/api/refresh',{method:'POST'});const x=await r.json();if(x.status!=='ok'){alert('Ошибка источника: '+(x.error||'неизвестная ошибка'))}else if(x.loaded===0){alert('Источник ответил, но 0 закупок прошло фильтры. RAW: '+(x.stats?.raw||0)+' | цена: '+(x.stats?.price_ok||0)+' | ключевые слова: '+(x.stats?.keyword_ok||0)+' | регион: '+(x.stats?.region_ok||0))}else{alert('Загружено: '+x.loaded)}await load()}load();setInterval(load,60000)
+async function refresh(){const r=await fetch('/api/refresh',{method:'POST'});const x=await r.json();if(x.status!=='ok'){alert('Ошибка источника: '+(x.error||'неизвестная ошибка'))}else if(x.loaded===0){alert('Источник ответил, но 0 закупок прошло фильтры. RAW: '+(x.raw||0)+' | страницы: '+(x.pages||0))}else{alert('Загружено: '+x.loaded)}await load()}load();setInterval(load,60000)
 </script></html>'''

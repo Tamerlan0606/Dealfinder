@@ -145,6 +145,7 @@ def _fit(item):
 def refresh():
     db=connect(os.getenv("DB_PATH","deals.db")); api_key=os.getenv("GOSPLAN_API_KEY","").strip()
     base=os.getenv("GOSPLAN_BASE_URL", "https://v2.gosplan.info" if api_key else "https://v2test.gosplan.info")
+    endpoints=[x.strip() for x in os.getenv("GOSPLAN_ENDPOINTS","/fz44/purchases,/fz223/purchases").split(",") if x.strip()]
     headers={"User-Agent":"DealFinder/5.0","Accept":"application/json"}
     if api_key:headers["X-API-Key"]=api_key
     loaded=raw=pages=0;seen=set();diag={"region":0,"exclude":0,"keyword":0,"price":0,"advance":0,"security":0,"experience":0,"deadline":0,"accepted":0}
@@ -152,12 +153,13 @@ def refresh():
     test_interval=float(os.getenv("GOSPLAN_TEST_INTERVAL","7.0"))
     try:
         with httpx.Client(timeout=40,follow_redirects=True,headers=headers) as client:
-            for page in range(max_pages):
-                if page and not api_key:
+            for endpoint in endpoints:
+              for page in range(max_pages):
+                if (page or endpoint != endpoints[0]) and not api_key:
                     time.sleep(test_interval)
                 params={"limit":10,"skip":page*10}
                 for attempt in range(3):
-                    r=client.get(base+"/fz44/purchases",params=params)
+                    r=client.get(base+endpoint,params=params)
                     if r.status_code != 429:
                         r.raise_for_status()
                         break

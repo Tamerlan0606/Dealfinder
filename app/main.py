@@ -23,10 +23,6 @@ class Match(BaseModel):
 @app.on_event("startup")
 def startup():
     connect(DB).close()
-    try:
-        refresh()
-    except Exception:
-        pass
 
 @app.get("/api/hot")
 def hot(limit:int=50):
@@ -75,6 +71,14 @@ def stats():
 @app.post("/api/refresh")
 def api_refresh():
     return refresh()
+
+@app.get("/api/diagnostics")
+def diagnostics():
+    c=connect(DB)
+    total=c.execute("SELECT count(*) n FROM buyers").fetchone()["n"]
+    hot=c.execute("SELECT count(*) n FROM buyers WHERE fit_status='ЗАХОДИМ'").fetchone()["n"]
+    c.close()
+    return {"status":"ok","db_path":DB,"buyers":total,"hot":hot,"api_key_configured":bool(os.getenv("GOSPLAN_API_KEY","").strip()),"endpoints":os.getenv("GOSPLAN_ENDPOINTS","/fz44/purchases,/fz223/purchases").split(","),"min_rub":float(os.getenv("DEAL_MIN_RUB","10000000")),"max_rub":float(os.getenv("DEAL_MAX_RUB","90000000")),"min_advance_pct":float(os.getenv("DEAL_MIN_ADVANCE_PCT","20")),"bg_limit_rub":float(os.getenv("DEAL_BG_LIMIT_RUB","17000000"))}
 
 @app.post("/buyers")
 def buyer(x:Buyer):

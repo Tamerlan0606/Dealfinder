@@ -167,7 +167,8 @@ def _region_allowed(item, blob):
             region_parts.append(_text(v).lower())
     structured=" ".join(region_parts)
     if structured:
-        return any(x in structured for x in REGIONS)
+        variants=("ростов","ставропол","ингушет","назран","магас","кабардин","нальчик","осети","владикавказ","краснодар","москва","московск")
+        return any(x in structured for x in variants)
     # For unstructured records, accept when an allowed region is explicit.
     # Unknown geography goes to document review instead of being silently discarded.
     return True

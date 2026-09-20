@@ -1,4 +1,4 @@
-import os, html
+import os, html, json
 from fastapi import FastAPI, Query
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
@@ -32,7 +32,18 @@ def hot(limit:int=50):
     rows=c.execute("""SELECT * FROM buyers WHERE budget_rub BETWEEN ? AND ? AND fit_status='ЗАХОДИМ' AND advance_pct >= ?
                       ORDER BY advance_pct DESC, created_at DESC LIMIT ?""",(min_r,max_r,float(os.getenv("DEAL_MIN_ADVANCE_PCT","20")),limit)).fetchall()
     c.close()
-    return [dict(r) for r in rows]
+    result=[]
+    min_margin=float(os.getenv("MIN_MARGIN_RUB","200000"))
+    min_margin_pct=float(os.getenv("MIN_MARGIN_PCT","10"))
+    for r in rows:
+        d=dict(r)
+        e=tender_economics(d["budget_rub"],d["advance_pct"],security_rub=d.get("security_rub") or 0,
+                           description=(d.get("title") or "")+" "+(d.get("description") or ""),
+                           document_text=d.get("document_text") or "")
+        d["economics"]=e
+        d["economic_status"]="ЗАХОДИМ" if e and e["margin_rub"]>=min_margin and e["margin_pct"]>=min_margin_pct else "ПРОВЕРИТЬ ЭКОНОМИКУ"
+        result.append(d)
+    return result
 
 @app.post("/api/review")
 def api_review(limit:int=30):
@@ -42,7 +53,7 @@ def api_review(limit:int=30):
 def economics(buyer_id:int):
     c=connect(DB); b=c.execute("SELECT * FROM buyers WHERE id=?",(buyer_id,)).fetchone(); c.close()
     if not b: return {"error":"not found"}
-    e=tender_economics(b["budget_rub"],b["advance_pct"],security_rub=0,description=(b["title"] or "")+" "+(b["description"] or ""))
+    e=tender_economics(b["budget_rub"],b["advance_pct"],security_rub=b["security_rub"] or 0,description=(b["title"] or "")+" "+(b["description"] or ""),document_text=b["document_text"] or "")
     return {"buyer":dict(b),"economics":e}
 
 @app.get("/api/buyers")

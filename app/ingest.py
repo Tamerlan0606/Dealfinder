@@ -200,12 +200,11 @@ def _request_page(client,url,headers,params):
 
 def refresh():
     db=connect(os.getenv("DB_PATH") or ("/data/deals.db" if os.path.isdir("/data") else "deals.db")); api_key=os.getenv("GOSPLAN_API_KEY","").strip()
-    # Без ключа GosPlan не используем тестовый API: он нестабилен и возвращает 422/429.
-    # Сразу работаем через публичный RSS ЕИС, после чего review_unknown обогащает карточки.
-    if not api_key and os.getenv("USE_GOSPLAN_TEST","false").lower() != "true":
-        fb=_rss_fallback(db)
-        db.close()
-        return {"status":"ok","loaded":fb["loaded"],"raw":fb["raw"],"pages":0,"source":"eis_rss","server":"zakupki.gov.ru","api_mode":"public_rss","diagnostics":{"mode":"rss_without_gosplan_key"}}
+    # Без production-ключа используем бесплатный тестовый ГосПлан API.
+    # Документация ГосПлана подтверждает /fz44/purchases?limit=10&skip=0 без ключа.
+    # Тестовый сервер ограничен по частоте запросов.
+    if not api_key and os.getenv("USE_GOSPLAN_TEST","true").lower() == "true":
+        base="https://v2test.gosplan.info"
     base=os.getenv("GOSPLAN_BASE_URL","https://v2.gosplan.info" if api_key else "https://v2test.gosplan.info").rstrip("/")
     endpoints=[x.strip() for x in os.getenv("GOSPLAN_ENDPOINTS","/fz44/purchases,/fz223/purchases").split(",") if x.strip()]
     headers={"User-Agent":"DealFinder/5.1","Accept":"application/json"}

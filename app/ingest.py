@@ -10,6 +10,8 @@ KEYWORDS=[x.strip().lower() for x in os.getenv("DEAL_KEYWORDS","благоуст
 EXCLUDE_KEYWORDS=[x.strip().lower() for x in os.getenv("DEAL_EXCLUDE_KEYWORDS","автомобильных дорог,ремонт дорог,содержание дорог,медицинск газ,медицинских газ,газоснабж магистраль").split(",") if x.strip()]
 MIN_RUB=float(os.getenv("DEAL_MIN_RUB","10000000")); MAX_RUB=float(os.getenv("DEAL_MAX_RUB","90000000"))
 MIN_ADV=float(os.getenv("DEAL_MIN_ADVANCE_PCT","20")); MAX_BG=float(os.getenv("DEAL_BG_LIMIT_RUB","17000000"))
+_RATE_LIMITED_UNTIL=0.0
+_RATE_LIMITED_REASON=""
 
 def _norm_key(k):
     return re.sub(r"[^a-zа-я0-9]","",str(k).lower())
@@ -199,6 +201,11 @@ def _request_page(client,url,headers,params):
     return r
 
 def refresh():
+    global _RATE_LIMITED_UNTIL, _RATE_LIMITED_REASON
+    now=time.time()
+    if now < _RATE_LIMITED_UNTIL:
+        left=max(1,int(_RATE_LIMITED_UNTIL-now))
+        return {"status":"rate_limited","loaded":0,"raw":0,"pages":0,"source":"gosplan_v2","server":"https://v2test.gosplan.info","api_mode":"test","retry_after":left,"error":_RATE_LIMITED_REASON or "GosPlan API rate limit; ожидаем cooldown"}
     db=connect(os.getenv("DB_PATH") or ("/data/deals.db" if os.path.isdir("/data") else "deals.db")); api_key=os.getenv("GOSPLAN_API_KEY","").strip()
     # Без production-ключа используем бесплатный тестовый ГосПлан API.
     # Документация ГосПлана подтверждает /fz44/purchases?limit=10&skip=0 без ключа.
@@ -211,21 +218,29 @@ def refresh():
     if api_key:headers["X-API-Key"]=api_key
     loaded=raw=pages=0;seen=set();page_signatures=set()
     diag={"region":0,"exclude":0,"price":0,"advance":0,"security":0,"experience":0,"deadline":0,"accepted":0}
-    max_pages=int(os.getenv("GOSPLAN_MAX_PAGES","20")); test_interval=float(os.getenv("GOSPLAN_TEST_INTERVAL","7"))
+    max_pages=max(1,int(os.getenv("GOSPLAN_MAX_PAGES","3"))); test_interval=max(5.0,float(os.getenv("GOSPLAN_TEST_INTERVAL","10"))); cooldown=int(os.getenv("GOSPLAN_RATE_LIMIT_COOLDOWN","300"))
     try:
-        with httpx.Client(timeout=40,follow_redirects=True,headers=headers) as client:
+        with httpx.Client(timeout=15,follow_redirects=True,headers=headers) as client:
             for endpoint in endpoints:
                 for page in range(max_pages):
                     if (page or endpoint != endpoints[0]) and not api_key: time.sleep(test_interval)
                     params={"limit":10,"skip":page*10}
-                    for attempt in range(4):
-                        r=client.get(base+endpoint,params=params)
-                        if r.status_code!=429:break
-                        if attempt==3: raise RuntimeError("GosPlan 429: лимит API, повторите обновление позже")
-                        time.sleep(max(7.0,float(r.headers.get("Retry-After","7")) if str(r.headers.get("Retry-After","7")).replace(".","",1).isdigit() else 7.0))
+                    r=client.get(base+endpoint,params=params)
+                    if r.status_code==429:
+                        raw_retry=r.headers.get("Retry-After") or r.headers.get("X-RateLimit-Retry-After-Seconds")
+                        try:
+                            retry=max(30,min(3600,int(float(raw_retry)))) if raw_retry else cooldown
+                        except Exception:
+                            retry=cooldown
+                        _RATE_LIMITED_UNTIL=time.time()+retry
+                        _RATE_LIMITED_REASON=f"GosPlan HTTP 429: rate limit; следующая попытка через {retry} сек."
+                        db.rollback()
+                        return {"status":"rate_limited","loaded":loaded,"raw":raw,"pages":pages,"source":"gosplan_v2","server":base,"api_mode":"test" if not api_key else "production","http_status":429,"retry_after":retry,"error":_RATE_LIMITED_REASON,"diagnostics":diag}
                     if r.status_code==422 and page>0:
                         break
                     r.raise_for_status()
+                    _RATE_LIMITED_UNTIL=0.0
+                    _RATE_LIMITED_REASON=""
                     data=r.json()
                     items=data if isinstance(data,list) else (data.get("items") or data.get("data") or data.get("results") or [])
                     if not isinstance(items,list) or not items:break

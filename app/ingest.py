@@ -127,7 +127,9 @@ def _fit(item):
     price=_price(item)
     if not price:return False,"НМЦК"
     adv=_advance(item,blob,price)
-    if adv is None or adv<MIN_ADV:return False,f"аванс < {MIN_ADV:.0f}%/не подтвержден"
+    if adv is None:
+        return False,f"аванс < {MIN_ADV:.0f}%/не подтвержден"
+    if adv<MIN_ADV:return False,f"аванс < {MIN_ADV:.0f}%/не подтвержден"
     sec=_security(item,blob,price)
     if sec is not None and sec>MAX_BG:return False,"обеспечение выше лимита БГ"
     exp=_experience(blob)
@@ -142,11 +144,11 @@ def _fit(item):
 
 def refresh():
     db=connect(os.getenv("DB_PATH","deals.db")); api_key=os.getenv("GOSPLAN_API_KEY","").strip()
-    base="https://v2.gosplan.info" if api_key else "https://v2test.gosplan.info"
+    base=os.getenv("GOSPLAN_BASE_URL", "https://v2.gosplan.info" if api_key else "https://v2test.gosplan.info")
     headers={"User-Agent":"DealFinder/5.0","Accept":"application/json"}
     if api_key:headers["X-API-Key"]=api_key
     loaded=raw=pages=0;seen=set();diag={"region":0,"exclude":0,"keyword":0,"price":0,"advance":0,"security":0,"experience":0,"deadline":0,"accepted":0}
-    max_pages=int(os.getenv("GOSPLAN_MAX_PAGES","8"))
+    max_pages=int(os.getenv("GOSPLAN_MAX_PAGES","20"))
     test_interval=float(os.getenv("GOSPLAN_TEST_INTERVAL","7.0"))
     try:
         with httpx.Client(timeout=40,follow_redirects=True,headers=headers) as client:

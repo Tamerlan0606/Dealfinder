@@ -146,24 +146,39 @@ def _security(item,blob,price):
 
 def _fit(item):
     blob=_text(item).lower()
-    if REGIONS and not any(x in blob for x in REGIONS):return False,"регион"
-    if any(x in blob for x in EXCLUDE_KEYWORDS):return False,"вне профиля"
-    if not any(x in blob for x in KEYWORDS):return False,"вне профиля"
+    places=item.get("delivery_places") or item.get("delivery_places_kladr") or []
+    has_geo=bool(places) or any(x in blob for x in (
+        "область","край","республика","москва","петербург","московск","ростов","ставропол",
+        "краснодар","ингушет","осети","кабардин","район","г.","город"
+    ))
+    # Регион отбрасываем только если география явно есть и она чужая
+    if REGIONS and has_geo and not any(x in blob for x in REGIONS):
+        return False,"регион"
+    if any(x in blob for x in EXCLUDE_KEYWORDS):
+        return False,"вне профиля"
+    if not any(x in blob for x in KEYWORDS):
+        return False,"вне профиля"
     price=_price(item)
-    if not price:return False,"НМЦК"
+    if not price:
+        return False,"НМЦК"
+    if price < MIN_RUB or price > MAX_RUB:
+        return False,"НМЦК"
     adv=_advance(item,blob,price)
-    if adv is not None and adv<MIN_ADV:return False,f"аванс < {MIN_ADV:.0f}%"
+    if adv is not None and adv < MIN_ADV:
+        return False,f"аванс < {MIN_ADV:.0f}%"
     sec=_security(item,blob,price)
-    if sec is not None and sec>MAX_BG:return False,"обеспечение выше лимита БГ"
-    exp=_experience(blob)
-    if exp=="требует проверки":return False,"опыт не подтвержден профилем"
+    if sec is not None and sec > MAX_BG:
+        return False,"обеспечение выше лимита БГ"
+    # Опыт не режем на ingestion — оставляем на review/ручную оценку
     deadline=_deadline(item,blob)
     if deadline:
         try:
             d=datetime.strptime(deadline,"%Y-%m-%d").replace(tzinfo=timezone.utc)
-            if d<datetime.now(timezone.utc):return False,"срок подачи истек"
-        except:pass
-    return True,"требует проверки аванса" if adv is None else "аванс; профиль; НМЦК; БГ"
+            if d < datetime.now(timezone.utc):
+                return False,"срок подачи истек"
+        except Exception:
+            pass
+    return True,("требует проверки аванса" if adv is None else "аванс; профиль; НМЦК; БГ")
 
 def _request_page(client,url,headers,params):
     r=client.get(url,params=params)
@@ -256,6 +271,7 @@ def _rss_fallback(db):
                     if not price or any(x in blob for x in EXCLUDE_KEYWORDS) or not any(x in blob for x in KEYWORDS): continue
                     db.execute('INSERT OR IGNORE INTO buyers(source,external_id,title,description,url,contact,budget_rub,city,advance_pct,fit_status,fit_reasons) VALUES(?,?,?,?,?,?,?,?,?,?,?)',('eis_rss',ext,title,desc,link_url,'',price,'',None,'ПРОВЕРИТЬ АВАНС','RSS; требуется проверка карточки')); loaded+=1
         db.commit()
-    except Exception: pass
+    except Exception as e:
+        return {'loaded':loaded,'raw':raw,'error':str(e)}
     return {'loaded':loaded,'raw':raw}
 def start_loop():return None

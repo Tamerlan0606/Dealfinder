@@ -205,6 +205,13 @@ def refresh():
     now=time.time()
     if now < _RATE_LIMITED_UNTIL:
         left=max(1,int(_RATE_LIMITED_UNTIL-now))
+        db=connect(os.getenv("DB_PATH") or ("/data/deals.db" if os.path.isdir("/data") else "deals.db"))
+        try:
+            fb=_rss_fallback(db)
+            if fb.get("loaded",0):
+                return {"status":"fallback","loaded":fb["loaded"],"raw":fb.get("raw",0),"pages":0,"source":"eis_rss_fallback","server":"zakupki.gov.ru","api_mode":"public_rss","retry_after":left,"warning":_RATE_LIMITED_REASON}
+        finally:
+            db.close()
         return {"status":"rate_limited","loaded":0,"raw":0,"pages":0,"source":"gosplan_v2","server":"https://v2test.gosplan.info","api_mode":"test","retry_after":left,"error":_RATE_LIMITED_REASON or "GosPlan API rate limit; ожидаем cooldown"}
     db=connect(os.getenv("DB_PATH") or ("/data/deals.db" if os.path.isdir("/data") else "deals.db")); api_key=os.getenv("GOSPLAN_API_KEY","").strip()
     # Без production-ключа используем бесплатный тестовый ГосПлан API.
@@ -293,7 +300,7 @@ def _rss_fallback(db):
     keywords=['благоустройство','уборка территорий','клининг','снег','очистка крыш','ремонт кровли','озеленение','ремонт зданий','строительство']
     base='https://zakupki.gov.ru/epz/order/extendedsearch/rss.html'
     try:
-        with httpx.Client(timeout=35,follow_redirects=True,headers={'User-Agent':'DealFinder/6.1'}) as client:
+        with httpx.Client(timeout=8,follow_redirects=True,headers={'User-Agent':'DealFinder/6.1'}) as client:
             for kw in keywords:
                 r=client.get(base+'?searchString='+quote(kw)+'&morphology=on&pageNumber=1')
                 if r.status_code>=400: continue

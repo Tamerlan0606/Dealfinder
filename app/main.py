@@ -138,6 +138,10 @@ def stats():
 def api_refresh():
     return _run_refresh_once()
 
+@app.get("/api/refresh")
+def api_refresh_get():
+    return _run_refresh_once()
+
 @app.get("/api/diagnostics")
 def diagnostics():
     c=connect(DB)
@@ -212,5 +216,5 @@ body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#f5f5f7;
 <script>
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 async function load(){try{const sr=await fetch('/api/stats');if(!sr.ok)throw new Error('stats HTTP '+sr.status);const s=await sr.json();for(let k of ['buyers','suppliers','hot']){let el=document.getElementById(k);if(el)el.textContent=s[k]??0}const ar=await fetch('/api/hot');if(!ar.ok)throw new Error('hot HTTP '+ar.status);const a=await ar.json();const el=document.getElementById('list');el.innerHTML=a.length?'':'<div class="card">Пока подходящих закупок нет.</div>';a.forEach(x=>{const e=x.economics||{};el.innerHTML+=`<div class="card"><h3>ЗАХОДИМ · ${esc(x.title)}</h3><div class="muted">${esc(x.city||'Регион не указан')} · НМЦК ${Number(x.budget_rub||0).toLocaleString('ru-RU')} ₽ · аванс ${x.advance_pct??'—'}%</div><p>${esc((x.description||'').slice(0,280))}</p><div class="money">Маржа: ${Number(e.margin_rub||0).toLocaleString('ru-RU')} ₽</div><div class="muted">Свои деньги: ${Number(e.own_cash_needed_rub||0).toLocaleString('ru-RU')} ₽ · цена контракта: ${Number(e.contract_price||0).toLocaleString('ru-RU')} ₽</div>${x.deadline?'<div class="muted">Срок подачи: '+esc(x.deadline)+'</div>':''}${x.url?`<a class="btn" href="${esc(x.url)}" target="_blank">Открыть закупку</a>`:''}</div>`})}catch(e){document.getElementById('list').innerHTML='<div class="card">Ошибка загрузки: '+esc(e.message)+'</div>'}}
-async function refresh(){const b=document.querySelector('.refresh');if(b){b.disabled=true;b.textContent='ОБНОВЛЕНИЕ…'}try{const r=await fetch('/api/refresh',{method:'POST'});const x=await r.json();if(x.status!=='ok')alert('Ошибка источника: '+(x.error||'неизвестная ошибка'));else if(x.loaded===0)alert('Источник ответил, но 0 закупок прошло фильтры. RAW: '+(x.raw||0)+' | страницы: '+(x.pages||0));else alert('Загружено: '+x.loaded+' закупок')}catch(e){alert('Ошибка соединения: '+e.message)}finally{if(b){b.disabled=false;b.textContent='ОБНОВИТЬ'}}await load()}load();setInterval(load,60000)
+async function refresh(){const b=document.querySelector('.refresh');if(b){b.disabled=true;b.textContent='ОБНОВЛЕНИЕ…'}try{const r=await fetch('/api/refresh');const x=await r.json();if(x.status!=='ok')alert('Ошибка источника: '+(x.error||'неизвестная ошибка'));else if(x.loaded===0)alert('Источник ответил, но 0 закупок прошло фильтры. RAW: '+(x.raw||0)+' | страницы: '+(x.pages||0));else alert('Загружено: '+x.loaded+' закупок')}catch(e){alert('Ошибка соединения: '+e.message)}finally{if(b){b.disabled=false;b.textContent='ОБНОВИТЬ'}}await load()}load();setInterval(load,60000)
 </script></html>'''

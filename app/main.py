@@ -155,40 +155,34 @@ def stats():
     c.close()
     return {"buyers":buyers,"suppliers":suppliers,"hot":hot}
 
-def _start_manual_refresh():
+def _manual_refresh():
+    global _last_bg_error, _last_bg_result
     if not _refresh_lock.acquire(blocking=False):
-        return False
-    def worker():
-        global _last_bg_error, _last_bg_result
-        result={"status":"error","error":"refresh did not start"}
-        try:
-            result=refresh()
-            _last_bg_result=result
-            if result.get("status") in ("ok","fallback"):
-                _last_bg_error=None
-            else:
-                _last_bg_error=result.get("error") or "refresh returned non-ok"
-        except Exception as e:
-            _last_bg_error=f"{type(e).__name__}: {e}"
-            _last_bg_result={"status":"error","error":_last_bg_error}
-        finally:
-            _refresh_lock.release()
-        if result.get("status") in ("ok","fallback") and os.getenv("AUTO_REVIEW","true").lower()=="true":
-            threading.Thread(target=_run_review_background,args=(result,),daemon=True).start()
-    threading.Thread(target=worker,daemon=True).start()
-    return True
+        return {"status":"busy","error":"Обновление уже выполняется","last_result":_last_bg_result}
+    try:
+        result=refresh()
+        _last_bg_result=result
+        if result.get("status") in ("ok","fallback"):
+            _last_bg_error=None
+            if os.getenv("AUTO_REVIEW","true").lower()=="true":
+                threading.Thread(target=_run_review_background,args=(result,),daemon=True).start()
+        else:
+            _last_bg_error=result.get("error") or "refresh returned non-ok"
+        return result
+    except Exception as e:
+        _last_bg_error=f"{type(e).__name__}: {e}"
+        _last_bg_result={"status":"error","error":_last_bg_error}
+        return _last_bg_result
+    finally:
+        _refresh_lock.release()
 
 @app.post("/api/refresh")
 def api_refresh():
-    if not _start_manual_refresh():
-        return JSONResponse({"status":"busy","error":"Обновление уже выполняется","last_result":_last_bg_result},status_code=200)
-    return {"status":"started","message":"Обновление запущено","last_result":_last_bg_result}
+    return _manual_refresh()
 
 @app.get("/api/refresh")
 def api_refresh_get():
-    if not _start_manual_refresh():
-        return JSONResponse({"status":"busy","error":"Обновление уже выполняется","last_result":_last_bg_result},status_code=200)
-    return {"status":"started","message":"Обновление запущено","last_result":_last_bg_result}
+    return _manual_refresh()
 
 @app.get("/api/refresh-status")
 def refresh_status():
@@ -288,5 +282,5 @@ body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#f5f5f7;
 <script>
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 async function load(){try{const sr=await fetch('/api/stats');if(!sr.ok)throw new Error('stats HTTP '+sr.status);const s=await sr.json();for(let k of ['buyers','suppliers','hot']){let el=document.getElementById(k);if(el)el.textContent=s[k]??0}const ar=await fetch('/api/hot');if(!ar.ok)throw new Error('hot HTTP '+ar.status);const a=await ar.json();const el=document.getElementById('list');el.innerHTML=a.length?'':'<div class="card">Пока подходящих закупок нет.</div>';a.forEach(x=>{const e=x.economics||{};el.innerHTML+=`<div class="card"><h3>ЗАХОДИМ · ${esc(x.title)}</h3><div class="muted">${esc(x.city||'Регион не указан')} · НМЦК ${Number(x.budget_rub||0).toLocaleString('ru-RU')} ₽ · аванс ${x.advance_pct??'—'}%</div><p>${esc((x.description||'').slice(0,280))}</p><div class="money">Маржа: ${Number(e.margin_rub||0).toLocaleString('ru-RU')} ₽</div><div class="muted">Свои деньги: ${Number(e.own_cash_needed_rub||0).toLocaleString('ru-RU')} ₽ · цена контракта: ${Number(e.contract_price||0).toLocaleString('ru-RU')} ₽</div>${x.deadline?'<div class="muted">Срок подачи: '+esc(x.deadline)+'</div>':''}${x.url?`<a class="btn" href="${esc(x.url)}" target="_blank">Открыть закупку</a>`:''}</div>`})}catch(e){document.getElementById('list').innerHTML='<div class="card">Ошибка загрузки: '+esc(e.message)+'</div>'}}
-async function refresh(){const b=document.querySelector('.refresh');if(b){b.disabled=true;b.textContent='ОБНОВЛЕНИЕ…'}try{const url=new URL('/api/refresh',window.location.href).href;const r=await fetch(url,{method:'GET',cache:'no-store',headers:{'Accept':'application/json'}});const raw=await r.text();let x;try{x=JSON.parse(raw)}catch(_){throw new Error('HTTP '+r.status+': сервер вернул не JSON')}if(!r.ok){throw new Error('HTTP '+r.status+': '+(x.error||x.status||'ошибка сервера'))}if(x.status==='busy'){alert('Обновление уже выполняется. Результаты обновятся автоматически.');await load();return}else if(x.status==='started'){alert('Обновление запущено. Результаты появятся автоматически.');pollRefreshStatus();return}else if(x.status==='rate_limited'){alert('Источник временно ограничил запросы. Повторить через '+(x.retry_after||300)+' сек.')}else if(x.status!=='ok'&&x.status!=='fallback'){alert('Ошибка источника: '+(x.error||x.warning||('статус '+x.status)+' | raw '+(x.raw??0)));}else if(x.loaded===0){alert('Источник ответил, но 0 закупок прошло фильтры. RAW: '+(x.raw||0)+' | страницы: '+(x.pages||0))}else{alert('Загружено: '+x.loaded+' закупок')}}catch(e){alert('Ошибка соединения: '+(e&&e.message?e.message:String(e)))}finally{if(b){b.disabled=false;b.textContent='ОБНОВИТЬ'}}await load()}async function pollRefreshStatus(){for(let i=0;i<60;i++){try{const r=await fetch('/api/refresh-status',{cache:'no-store'});const s=await r.json();if(!s.running){await load();if(s.status==='error'){const msg=s.last_error||(s.last_result&&s.last_result.error)||'неизвестная ошибка';alert('Ошибка источника: '+msg)}return}}catch(e){}await new Promise(r=>setTimeout(r,2000))}await load()}load();setInterval(load,60000)
+async function refresh(){const b=document.querySelector('.refresh');if(b){b.disabled=true;b.textContent='ОБНОВЛЕНИЕ…'}try{const url=new URL('/api/refresh',window.location.href).href;const r=await fetch(url,{method:'GET',cache:'no-store',headers:{'Accept':'application/json'}});const raw=await r.text();let x;try{x=JSON.parse(raw)}catch(_){throw new Error('HTTP '+r.status+': сервер вернул не JSON')}if(!r.ok){throw new Error('HTTP '+r.status+': '+(x.error||x.status||'ошибка сервера'))}if(x.status==='busy'){alert('Обновление уже выполняется. Результаты обновятся автоматически.');await load();return}else if(x.status==='started'){alert('Обновление запущено. Результаты появятся автоматически.');pollRefreshStatus();return}else if(x.status==='rate_limited'){alert('Источник временно ограничил запросы. Повторить через '+(x.retry_after||300)+' сек.')}else if(x.status!=='ok'&&x.status!=='fallback'){alert('Ошибка источника: '+(x.error||x.warning||('статус '+x.status)+' | raw '+(x.raw??0)));}else if(x.loaded===0){alert('Источник ответил, но 0 закупок прошло фильтры. RAW: '+(x.raw||0)+' | страницы: '+(x.pages||0))}else{alert('Загружено: '+x.loaded+' закупок')}}catch(e){alert('Ошибка соединения: '+(e&&e.message?e.message:String(e)))}finally{if(b){b.disabled=false;b.textContent='ОБНОВИТЬ'}}await load()}async function pollRefreshStatus(){for(let i=0;i<300;i++){try{const r=await fetch('/api/refresh-status',{cache:'no-store'});const s=await r.json();if(!s.running){await load();if(s.status==='error'){const msg=s.last_error||(s.last_result&&s.last_result.error)||'неизвестная ошибка';alert('Ошибка источника: '+msg)}return}}catch(e){}await new Promise(r=>setTimeout(r,2000))}await load()}load();setInterval(load,60000)
 </script></html>'''

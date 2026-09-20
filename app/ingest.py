@@ -72,6 +72,30 @@ def _items(data):
                     return found
     return []
 
+def _eis_fallback():
+    import urllib.parse, re
+    headers={"User-Agent":"Mozilla/5.0 (compatible; DealFinder/1.0)"}
+    out=[]
+    seen=set()
+    for kw in KEYWORDS[:8]:
+        q=urllib.parse.quote(kw)
+        url="https://zakupki.gov.ru/epz/order/extendedsearch/results.html?searchString="+q
+        try:
+            rr=httpx.get(url,headers=headers,timeout=20,follow_redirects=True)
+            if rr.status_code != 200:
+                continue
+            for m in re.finditer(r'href=["\\']([^"\\']*common-info[^"\\']*)["\\']',rr.text,re.I):
+                link=m.group(1)
+                if link.startswith("/"):
+                    link="https://zakupki.gov.ru"+link
+                n=re.search(r"regNumber[=/]([0-9]{10,})",link)
+                if n and n.group(1) not in seen:
+                    seen.add(n.group(1))
+                    out.append((n.group(1),kw,link))
+        except Exception:
+            pass
+    return out
+
 def refresh():
     db = connect(os.getenv("DB_PATH", "deals.db"))
     try:
@@ -113,6 +137,18 @@ def refresh():
         db.commit()
         return {"status":"ok","loaded":count,"stats":stats,"source":API,"updated_at":datetime.utcnow().isoformat()+"Z"}
     except httpx.HTTPStatusError as e:
+        if e.response.status_code == 429:
+            items = _eis_fallback()
+            db2 = connect(os.getenv("DB_PATH", "deals.db"))
+            loaded = 0
+            try:
+                for ext,kw,url in items:
+                    db2.execute("INSERT INTO buyers(source,external_id,title,description,url,contact,budget_rub,city) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(source,external_id) DO UPDATE SET title=excluded.title,url=excluded.url",("eis_web",ext,kw,url,"", "",0,""))
+                    loaded += 1
+                db2.commit()
+            finally:
+                db2.close()
+            return {"status":"ok","loaded":loaded,"source":"eis_web_fallback","api_error":"429"}
         return {"status":"error","error":f"HTTP {e.response.status_code}: {e.response.text[:500]}","source":API}
     except Exception as e:
         return {"status":"error","error":str(e),"source":API}

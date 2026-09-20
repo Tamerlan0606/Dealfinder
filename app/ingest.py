@@ -4,7 +4,7 @@ import httpx
 from .db import connect
 
 REGIONS=[x.strip().lower() for x in os.getenv("DEAL_REGIONS","Ростовская область,Ставропольский край,Республика Ингушетия,Кабардино-Балкарская Республика,Республика Северная Осетия — Алания,Краснодарский край,Москва,Московская область").split(",") if x.strip()]
-KEYWORDS=[x.strip().lower() for x in os.getenv("DEAL_KEYWORDS","благоустройство,строитель,капитальн,ремонт,кровл,фасад,монтаж,озелен,площадк,тротуар,освещен,водопровод,канализац,теплоснабж,электромонтаж").split(",") if x.strip()]
+KEYWORDS=[x.strip().lower() for x in os.getenv("DEAL_KEYWORDS","благоустройство,строитель,строительств,капитальн,ремонт,кровл,фасад,монтаж,озелен,площадк,тротуар,освещен,водопровод,канализац,теплоснабж,электромонтаж,общестро,стадион,спортив,маф,территор,уборк,клинин,клининг,содержан территор,зимн содержан,снег,снега,налед,сосул,очистк крыш,очистка кровл,механизированн уборк,ручн уборк").split(",") if x.strip()]
 EXCLUDE_KEYWORDS=[x.strip().lower() for x in os.getenv("DEAL_EXCLUDE_KEYWORDS","автомобильных дорог,ремонт дорог,содержание дорог,медицинск газ,медицинских газ,газоснабж магистраль").split(",") if x.strip()]
 MIN_RUB=float(os.getenv("DEAL_MIN_RUB","10000000")); MAX_RUB=float(os.getenv("DEAL_MAX_RUB","90000000"))
 MIN_ADV=float(os.getenv("DEAL_MIN_ADVANCE_PCT","20")); MAX_BG=float(os.getenv("DEAL_BG_LIMIT_RUB","17000000"))
@@ -105,7 +105,7 @@ def _sro(blob):
 
 def _experience(blob):
     if not re.search(r"опыт|аналогич|исполненн.*контракт|контрактов|квалификац",blob):return "не указано"
-    profile=("благоустрой","озелен","площадк","тротуар","ремонт здан","ремонт помещ","строительств здан","общестро","фасад","кровл","монтаж","спортивн","стадион")
+    profile=("благоустрой","озелен","площадк","тротуар","ремонт здан","ремонт помещ","строительств здан","общестро","фасад","кровл","монтаж","спортивн","стадион","уборк","клинин","содержан территор","зимн","снег","налед","сосул","очистк крыш","очистка кровл")
     return "совместимо" if any(x in blob for x in profile) else "требует проверки"
 
 def _security(item,blob,price):
@@ -145,7 +145,7 @@ def refresh():
     base="https://v2.gosplan.info" if api_key else "https://v2test.gosplan.info"
     headers={"User-Agent":"DealFinder/5.0","Accept":"application/json"}
     if api_key:headers["X-API-Key"]=api_key
-    loaded=raw=pages=0;seen=set()
+    loaded=raw=pages=0;seen=set();diag={"region":0,"exclude":0,"keyword":0,"price":0,"advance":0,"security":0,"experience":0,"deadline":0,"accepted":0}
     max_pages=int(os.getenv("GOSPLAN_MAX_PAGES","8"))
     test_interval=float(os.getenv("GOSPLAN_TEST_INTERVAL","7.0"))
     try:
@@ -177,7 +177,15 @@ def refresh():
                     if not ext or ext in seen:continue
                     seen.add(ext)
                     ok,reason=_fit(item)
-                    if not ok:continue
+                    if not ok:
+                        key={"регион":"region","вне профиля":"exclude","НМЦК":"price"}.get(reason)
+                        if reason.startswith("аванс"): key="advance"
+                        elif reason=="обеспечение выше лимита БГ": key="security"
+                        elif reason=="опыт не подтвержден профилем": key="experience"
+                        elif reason=="срок подачи истек": key="deadline"
+                        if key: diag[key]+=1
+                        continue
+                    diag["accepted"]+=1
                     blob=_text(item).lower();price=_price(item);adv=_advance(item,blob,price)
                     deadline=_deadline(item,blob)
                     db.execute("""INSERT INTO buyers(source,external_id,title,description,url,contact,budget_rub,city,advance_pct,advance_rub,deadline,procurement_type,sro_required,experience_required,fit_status,fit_reasons)
@@ -186,10 +194,10 @@ def refresh():
                     ("gosplan_v2",ext,_title(item),blob[:6000],_url(item,ext),"",price,"",adv,price*adv/100,deadline,_type(item,blob),_sro(blob),_experience(blob),"ЗАХОДИМ",reason)); loaded+=1
                 if len(items)<10:break
         db.commit()
-        return {"status":"ok","loaded":loaded,"raw":raw,"pages":pages,"source":"gosplan_v2","server":base,"advance_min_pct":MIN_ADV,"bg_limit_rub":MAX_BG,"pricing":"5% ниже НМЦК; налог 7%","updated_at":datetime.now(timezone.utc).isoformat()}
+        return {"status":"ok","loaded":loaded,"raw":raw,"pages":pages,"source":"gosplan_v2","server":base,"advance_min_pct":MIN_ADV,"bg_limit_rub":MAX_BG,"pricing":"5% ниже НМЦК; налог 7%","api_mode":"production" if api_key else "test","diagnostics":diag,"updated_at":datetime.now(timezone.utc).isoformat()}
     except Exception as e:
         db.rollback()
-        return {"status":"error","loaded":loaded,"raw":raw,"pages":pages,"error":str(e),"source":"gosplan_v2","server":base}
+        return {"status":"error","loaded":loaded,"raw":raw,"pages":pages,"error":str(e),"source":"gosplan_v2","server":base,"api_mode":"production" if api_key else "test","diagnostics":diag}
     finally:db.close()
 
 def start_loop():return None

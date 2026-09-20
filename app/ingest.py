@@ -1,4 +1,4 @@
-import os, re, time, threading
+import os, re
 from datetime import datetime
 import httpx
 from .db import connect
@@ -10,57 +10,91 @@ MAX_RUB=float(os.getenv("DEAL_MAX_RUB","90000000"))
 
 def _num(v):
     if isinstance(v,(int,float)): return float(v)
-    try: return float(re.sub(r"[^0-9.]","",str(v).replace("\xa0","").replace(" ","").replace(",", ".")))
-    except: return None
+    if v is None: return None
+    try:
+        s=str(v).replace("\xa0","").replace(" ","").replace(",",".")
+        return float(re.sub(r"[^0-9.]","",s))
+    except Exception:
+        return None
+
+def _text(v):
+    if v is None: return ""
+    if isinstance(v,(dict,list)): return " ".join(_text(x) for x in (v.values() if isinstance(v,dict) else v))
+    return str(v)
+
+def _walk_values(obj):
+    if isinstance(obj,dict):
+        for k,v in obj.items():
+            yield k,v
+            yield from _walk_values(v)
+    elif isinstance(obj,list):
+        for v in obj:
+            yield from _walk_values(v)
+
+def _price(item):
+    preferred=("max_price","maxPrice","initial_price","initialPrice","price","nmck","nmck_amount")
+    for key,v in _walk_values(item):
+        if key in preferred:
+            n=_num(v)
+            if n and MIN_RUB <= n <= MAX_RUB: return n
+    for key,v in _walk_values(item):
+        if any(x in key.lower() for x in ("price","cost","sum","amount","nmck")):
+            n=_num(v)
+            if n and MIN_RUB <= n <= MAX_RUB: return n
+    return None
+
+def _id(item):
+    for key,v in _walk_values(item):
+        if key.lower() in ("purchase_number","purchaseNumber","reg_number","regNumber","reestr_number","reestrNumber","id"):
+            s=str(v)
+            if re.fullmatch(r"\d{10,}",s): return s
+    return None
+
+def _title(item):
+    preferred=("title","name","purchase_name","purchaseName","object_info","objectInfo")
+    for p in preferred:
+        for key,v in _walk_values(item):
+            if key==p and isinstance(v,(str,int,float)) and str(v).strip(): return str(v).strip()
+    return "Закупка"
+
+def _url(item, ext):
+    for key,v in _walk_values(item):
+        if "url" in key.lower() and isinstance(v,str) and v.startswith("http"):
+            return v
+    return f"https://zakupki.gov.ru/epz/order/notice/ok20/view/common-info.html?regNumber={ext}"
 
 def refresh():
     db=connect(os.getenv("DB_PATH","deals.db"))
-    loaded=0; raw=0; pages=0
-    headers={"User-Agent":"Mozilla/5.0 (compatible; DealFinder/2.0)"}
+    api_key=os.getenv("GOSPLAN_API_KEY","").strip()
+    base="https://v2.gosplan.info" if api_key else "https://v2test.gosplan.info"
+    headers={"User-Agent":"DealFinder/2.1","Accept":"application/json"}
+    if api_key: headers["X-API-Key"]=api_key
     try:
-        for kw in KEYWORDS[:10]:
-            url="https://zakupki.gov.ru/epz/order/extendedsearch/results.html?searchString="+__import__("urllib.parse").parse.quote(kw)
-            try:
-                r=httpx.get(url,headers=headers,timeout=25,follow_redirects=True)
-                if r.status_code!=200: continue
-                pages+=1
-                html=r.text
-                links=re.findall(r"""href=["']([^"']*common-info[^"']*)["']""",html,re.I)
-                raw+=len(links)
-                for link in links[:100]:
-                    if link.startswith("/"): link="https://zakupki.gov.ru"+link
-                    m=re.search(r"regNumber[=/]([0-9]{10,})",link)
-                    if not m: continue
-                    ext=m.group(1)
-                    pos=html.find(link)
-                    chunk=re.sub(r"<[^>]+>"," ",html[max(0,pos-2500):pos+2500])
-                    chunk=re.sub(r"\s+"," ",chunk).strip()
-                    low=chunk.lower()
-                    if REGIONS and not any(x in low for x in REGIONS): continue
-                    if not any(x in low for x in KEYWORDS): continue
-                    price=None
-                    for n in re.findall(r"(?<![0-9])([0-9]{7,12}(?:[.,][0-9]{1,2})?)(?![0-9])",chunk.replace(" ","")):
-                        v=_num(n)
-                        if v and MIN_RUB<=v<=MAX_RUB: price=v; break
-                    if not price: continue
-                    title=chunk[:500] or kw
-                    db.execute("""INSERT INTO buyers(source,external_id,title,description,url,contact,budget_rub,city)
-                    VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(source,external_id) DO UPDATE SET title=excluded.title,description=excluded.description,url=excluded.url,budget_rub=excluded.budget_rub,city=excluded.city""",
-                    ("eis_public",ext,title,chunk[:1500],link,"",price,""))
-                    loaded+=1
-            except Exception:
-                continue
+        r=httpx.get(base+"/fz44/purchases",params={"limit":100,"skip":0},headers=headers,timeout=40,follow_redirects=True)
+        r.raise_for_status()
+        data=r.json()
+        items=data if isinstance(data,list) else (data.get("items") or data.get("data") or data.get("results") or [])
+        loaded=0
+        for item in items:
+            if not isinstance(item,dict): continue
+            blob=_text(item).lower()
+            if REGIONS and not any(x in blob for x in REGIONS): continue
+            if not any(x in blob for x in KEYWORDS): continue
+            price=_price(item)
+            if not price: continue
+            ext=_id(item)
+            if not ext: continue
+            title=_title(item)
+            db.execute("""INSERT INTO buyers(source,external_id,title,description,url,contact,budget_rub,city)
+            VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(source,external_id) DO UPDATE SET title=excluded.title,description=excluded.description,url=excluded.url,budget_rub=excluded.budget_rub,city=excluded.city""",
+            ("gosplan_v2",ext,title,blob[:4000],_url(item,ext),"",price,""))
+            loaded+=1
         db.commit()
-        return {"status":"ok","loaded":loaded,"raw":raw,"pages":pages,"source":"eis_public","updated_at":datetime.utcnow().isoformat()+"Z"}
+        return {"status":"ok","loaded":loaded,"raw":len(items),"source":"gosplan_v2","server":base,"updated_at":datetime.utcnow().isoformat()+"Z"}
     except Exception as e:
-        return {"status":"error","error":str(e),"source":"eis_public"}
+        return {"status":"error","error":str(e),"source":"gosplan_v2","server":base}
     finally:
         db.close()
 
 def start_loop():
-    def loop():
-        while True:
-            try: refresh()
-            except Exception: pass
-            time.sleep(int(os.getenv("REFRESH_SECONDS","3600")))
-    threading.Thread(target=loop,daemon=True).start()
+    return None

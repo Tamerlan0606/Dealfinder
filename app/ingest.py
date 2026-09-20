@@ -99,7 +99,7 @@ def _eis_fallback():
 def refresh():
     db = connect(os.getenv("DB_PATH", "deals.db"))
     try:
-        r = httpx.get(API, params={"limit": 10, "skip": 0, "sort": "published_date_desc"}, timeout=30, follow_redirects=True, headers={"User-Agent":"DealFinder/1.0"})
+        r = httpx.get(API, params={"limit": 10, "skip": 0, "sort": "published_at_desc"}, timeout=30, follow_redirects=True, headers={"User-Agent":"DealFinder/1.0"})
         r.raise_for_status()
         data = r.json()
         items = _items(data)

@@ -153,7 +153,7 @@ def refresh():
             for page in range(max_pages):
                 if page and not api_key:
                     time.sleep(test_interval)
-                params={"limit":100,"skip":page*100,"sort":"published_desc"}
+                params={"limit":10,"skip":page*10}
                 for attempt in range(3):
                     r=client.get(base+"/fz44/purchases",params=params)
                     if r.status_code != 429:
@@ -184,7 +184,7 @@ def refresh():
                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     ON CONFLICT(source,external_id) DO UPDATE SET title=excluded.title,description=excluded.description,url=excluded.url,budget_rub=excluded.budget_rub,advance_pct=excluded.advance_pct,advance_rub=excluded.advance_rub,deadline=excluded.deadline,procurement_type=excluded.procurement_type,sro_required=excluded.sro_required,experience_required=excluded.experience_required,fit_status=excluded.fit_status,fit_reasons=excluded.fit_reasons""",
                     ("gosplan_v2",ext,_title(item),blob[:6000],_url(item,ext),"",price,"",adv,price*adv/100,deadline,_type(item,blob),_sro(blob),_experience(blob),"ЗАХОДИМ",reason)); loaded+=1
-                if len(items)<100:break
+                if len(items)<10:break
         db.commit()
         return {"status":"ok","loaded":loaded,"raw":raw,"pages":pages,"source":"gosplan_v2","server":base,"advance_min_pct":MIN_ADV,"bg_limit_rub":MAX_BG,"pricing":"5% ниже НМЦК; налог 7%","updated_at":datetime.now(timezone.utc).isoformat()}
     except Exception as e:

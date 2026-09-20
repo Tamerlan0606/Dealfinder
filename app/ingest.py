@@ -297,6 +297,19 @@ ON CONFLICT(source,external_id) DO UPDATE SET title=excluded.title,description=e
         return {'status':'ok' if fb['loaded'] else 'error','loaded':fb['loaded'],'raw':raw+fb['raw'],'pages':pages,'error':str(e) if not fb['loaded'] else None,'source':'eis_rss_fallback','server':'zakupki.gov.ru','api_mode':'public_rss','diagnostics':diag}
     finally:db.close()
 
+def _advance_from_rss(blob, price):
+    patterns=[
+        r"(?:аванс|предоплат|предварительн(?:ой|ая|ую) оплат)[^%]{0,180}(\\d{1,3}(?:[.,]\\d+)?)\\s*%",
+        r"(\\d{1,3}(?:[.,]\\d+)?)\\s*%[^.]{0,120}(?:аванс|предоплат)"
+    ]
+    for p in patterns:
+        m=re.search(p,blob,re.I)
+        if m:
+            n=_num(m.group(1))
+            if n is not None and 0<n<=100:
+                return n
+    return None
+
 def _price_from_rss(blob):
     nums=[]
     for x in re.findall(r'\d[\d\s]*(?:[.,]\d+)?',blob):
@@ -321,7 +334,11 @@ def _rss_fallback(db):
                     if not ext or ext in seen: continue
                     seen.add(ext); price=_price_from_rss(blob)
                     if not price or any(x in blob for x in EXCLUDE_KEYWORDS) or not any(x in blob for x in KEYWORDS): continue
-                    db.execute('INSERT OR IGNORE INTO buyers(source,external_id,title,description,url,contact,budget_rub,city,advance_pct,fit_status,fit_reasons) VALUES(?,?,?,?,?,?,?,?,?,?,?)',('eis_rss',ext,title,desc,link_url,'',price,'',None,'ПРОВЕРИТЬ АВАНС','RSS; требуется проверка карточки')); loaded+=1
+                    adv=_advance_from_rss(blob,price)
+                    status="ЗАХОДИМ" if adv is not None and adv>=MIN_ADV else ("ОТБОЙ" if adv is not None else "ПРОВЕРИТЬ АВАНС")
+                    reason="RSS: аванс подтвержден" if status=="ЗАХОДИМ" else ("RSS: аванс ниже лимита" if status=="ОТБОЙ" else "RSS; требуется проверка карточки")
+                    if status=="ОТБОЙ": continue
+                    db.execute('INSERT OR IGNORE INTO buyers(source,external_id,title,description,url,contact,budget_rub,city,advance_pct,advance_rub,fit_status,fit_reasons) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',('eis_rss',ext,title,desc,link_url,'',price,'',adv,(price*adv/100 if adv is not None else None),status,reason)); loaded+=1
         db.commit()
     except Exception as e:
         return {'loaded':loaded,'raw':raw,'error':str(e)}

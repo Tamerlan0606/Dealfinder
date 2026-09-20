@@ -3,7 +3,7 @@ from datetime import datetime
 import httpx
 from .db import connect
 
-API = os.getenv("GOSPLAN_API_URL", "https://fz44test.gosplan.info/fz44/purchases")
+API = os.getenv("GOSPLAN_API_URL", "https://v2test.gosplan.info/fz44/purchases")
 REGIONS = [x.strip().lower() for x in os.getenv(
     "DEAL_REGIONS",
     "Ростовская область,Ставропольский край,Республика Ингушетия,Кабардино-Балкарская Республика,Республика Северная Осетия — Алания,Краснодарский край,Москва,Московская область"
@@ -97,7 +97,54 @@ def _eis_fallback():
     return out
 
 def refresh():
+    # Primary source: public EIS web search. GosPlan API is intentionally disabled
+    # because its shared sandbox rate limit returns HTTP 429 for this deployment.
     db = connect(os.getenv("DB_PATH", "deals.db"))
+    return _refresh_eis(db)
+
+def _refresh_eis(db):
+    import urllib.parse
+    headers={"User-Agent":"Mozilla/5.0 (iPhone; CPU iPhone OS 18_3_1 like Mac OS X) AppleWebKit/605.1.15 Safari/605.1.15"}
+    loaded=0
+    raw=0
+    for kw in KEYWORDS[:12]:
+        q=urllib.parse.quote(kw)
+        url="https://zakupki.gov.ru/epz/order/extendedsearch/results.html?searchString="+q+"&morphology=on&search-filter=Дате+размещения"
+        try:
+            r=httpx.get(url,headers=headers,timeout=30,follow_redirects=True)
+            if r.status_code != 200:
+                continue
+            text=r.text
+            # Extract notice links and nearby visible text from EIS result cards.
+            import re
+            matches=list(re.finditer(r'href=["\\']([^"\\']*common-info[^"\\']*)["\\']',text,re.I))
+            raw += len(matches)
+            for m in matches[:100]:
+                link=m.group(1)
+                if link.startswith("/"): link="https://zakupki.gov.ru"+link
+                nm=re.search(r'regNumber[=/]([0-9]{10,})',link)
+                if not nm: continue
+                ext=nm.group(1)
+                start=max(0,m.start()-2500); end=min(len(text),m.end()+2500)
+                chunk=re.sub(r'<[^>]+>',' ',text[start:end])
+                chunk=re.sub(r'&nbsp;|\\s+',' ',chunk).strip()
+                low=chunk.lower()
+                if REGIONS and not any(x in low for x in REGIONS): continue
+                if not any(x in low for x in KEYWORDS): continue
+                nums=re.findall(r'(?<![0-9])([1-9][0-9]{6,10}(?:[.,][0-9]{1,2})?)(?![0-9])',chunk.replace(" ","").replace("\\xa0",""))
+                price=None
+                for n in nums:
+                    v=_num(n)
+                    if v and MIN_RUB <= v <= MAX_RUB:
+                        price=v; break
+                if not price: continue
+                title=re.sub(r'\\s+',' ',chunk)[:500]
+                db.execute("INSERT INTO buyers(source,external_id,title,description,url,contact,budget_rub,city) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(source,external_id) DO UPDATE SET title=excluded.title,description=excluded.description,url=excluded.url,budget_rub=excluded.budget_rub,city=excluded.city",("eis_public",ext,title,chunk[:1500],link,"",price,""))
+                loaded += 1
+        except Exception:
+            continue
+    db.commit()
+    return {"status":"ok","loaded":loaded,"source":"eis_public","raw":raw}
     try:
         r = httpx.get(API, params={"limit": 10, "skip": 0, "sort": "published_at_desc"}, timeout=30, follow_redirects=True, headers={"User-Agent":"DealFinder/1.0"})
         r.raise_for_status()

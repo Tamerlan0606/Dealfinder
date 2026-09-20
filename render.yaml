@@ -20,7 +20,7 @@ services:
       - key: GOSPLAN_ENDPOINTS
         value: "/fz44/purchases,/fz223/purchases"
       - key: GOSPLAN_MAX_PAGES
-        value: "3"
+        value: "1"
       - key: REFRESH_SECONDS
         value: "3600"
       - key: AUTO_REFRESH
@@ -28,7 +28,7 @@ services:
       - key: AUTO_REVIEW
         value: "true"
       - key: AUTO_REVIEW_LIMIT
-        value: "20"
+        value: "5"
       - key: DEAL_BID_DISCOUNT_PCT
         value: "5"
       - key: DEAL_TAX_PCT

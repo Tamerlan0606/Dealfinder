@@ -176,7 +176,7 @@ def refresh():
     endpoints=[x.strip() for x in os.getenv("GOSPLAN_ENDPOINTS","/fz44/purchases,/fz223/purchases").split(",") if x.strip()]
     headers={"User-Agent":"DealFinder/5.1","Accept":"application/json"}
     if api_key:headers["X-API-Key"]=api_key
-    loaded=raw=pages=0;seen=set()
+    loaded=raw=pages=0;seen=set();page_signatures=set()
     diag={"region":0,"exclude":0,"price":0,"advance":0,"security":0,"experience":0,"deadline":0,"accepted":0}
     max_pages=int(os.getenv("GOSPLAN_MAX_PAGES","20")); test_interval=float(os.getenv("GOSPLAN_TEST_INTERVAL","7"))
     try:
@@ -196,6 +196,9 @@ def refresh():
                     data=r.json()
                     items=data if isinstance(data,list) else (data.get("items") or data.get("data") or data.get("results") or [])
                     if not isinstance(items,list) or not items:break
+                    signature=tuple(_id(x) for x in items if isinstance(x,dict))
+                    if signature and signature in page_signatures: break
+                    page_signatures.add(signature)
                     pages+=1;raw+=len(items)
                     for item in items:
                         if not isinstance(item,dict):continue

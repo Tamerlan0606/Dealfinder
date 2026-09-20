@@ -57,15 +57,25 @@ def _items(data):
     if isinstance(data, list):
         return data
     if isinstance(data, dict):
-        for k in ("items", "results", "purchases", "data"):
-            if isinstance(data.get(k), list):
-                return data[k]
+        for k in ("items", "results", "purchases", "data", "result", "content"):
+            v = data.get(k)
+            if isinstance(v, list):
+                return v
+            if isinstance(v, (dict, list)):
+                found = _items(v)
+                if found:
+                    return found
+        for v in data.values():
+            if isinstance(v, (dict, list)):
+                found = _items(v)
+                if found:
+                    return found
     return []
 
 def refresh():
     db = connect(os.getenv("DB_PATH", "deals.db"))
     try:
-        r = httpx.get(API, params={"limit": 100, "skip": 0, "sort": "published_date_desc"}, timeout=30, follow_redirects=True, headers={"User-Agent":"DealFinder/1.0"})
+        r = httpx.get(API, params={"limit": 10, "skip": 0, "sort": "published_date_desc"}, timeout=30, follow_redirects=True, headers={"User-Agent":"DealFinder/1.0"})
         r.raise_for_status()
         data = r.json()
         items = _items(data)

@@ -40,7 +40,7 @@ def _background_refresh():
             with _refresh_lock:
                 result = refresh()
             _last_bg_result = result
-            if result.get("status") == "ok":
+            if result.get("status") in ("ok","fallback"):
                 _last_bg_error = None
                 if os.getenv("AUTO_REVIEW","true").lower()=="true":
                     review_unknown(DB, int(os.getenv("AUTO_REVIEW_LIMIT","20")))
@@ -56,7 +56,7 @@ def _run_refresh_once():
     with _refresh_lock:
         result = refresh()
     _last_bg_result = result
-    if result.get("status") == "ok":
+    if result.get("status") in ("ok","fallback"):
         _last_bg_error = None
         if os.getenv("AUTO_REVIEW","true").lower()=="true":
             try:
@@ -142,6 +142,9 @@ def api_refresh():
 
 @app.get("/api/refresh")
 def api_refresh_get():
+    if not _refresh_lock.acquire(blocking=False):
+        return JSONResponse({"status":"busy","error":"Обновление уже выполняется","last_result":_last_bg_result}, status_code=409)
+    _refresh_lock.release()
     return _run_refresh_once()
 
 @app.get("/api/test-gosplan")

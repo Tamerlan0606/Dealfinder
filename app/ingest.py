@@ -65,7 +65,7 @@ def _items(data):
 def refresh():
     db = connect(os.getenv("DB_PATH", "deals.db"))
     try:
-        r = httpx.get(API, params={"limit": 100, "skip": 0}, timeout=30, follow_redirects=True)
+        r = httpx.get(API, params={"limit": 100, "skip": 0, "sort": "published_date_desc"}, timeout=30, follow_redirects=True, headers={"User-Agent":"DealFinder/1.0"})
         r.raise_for_status()
         data = r.json()
         count = 0
@@ -82,7 +82,7 @@ def refresh():
             low = (title + " " + blob).lower()
             if not any(k in low for k in KEYWORDS):
                 continue
-            if REGIONS and not any(rg in (region + " " + blob).lower() for rg in REGIONS):
+            if REGIONS and region and not any(rg in (region + " " + blob).lower() for rg in REGIONS):
                 continue
             if not url:
                 url = f"https://zakupki.gov.ru/epz/order/notice/ea20/view/common-info.html?regNumber={ext}"
@@ -97,8 +97,10 @@ def refresh():
             count += 1
         db.commit()
         return {"status":"ok","loaded":count,"updated_at":datetime.utcnow().isoformat()+"Z"}
+    except httpx.HTTPStatusError as e:
+        return {"status":"error","error":f"HTTP {e.response.status_code}: {e.response.text[:500]}","source":API}
     except Exception as e:
-        return {"status":"error","error":str(e)}
+        return {"status":"error","error":str(e),"source":API}
     finally:
         db.close()
 

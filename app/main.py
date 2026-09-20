@@ -8,6 +8,7 @@ from .scoring import calc
 from .telegram import notify
 from .outreach import send
 from .ingest import refresh
+from .review import review_unknown
 
 load_dotenv()
 DB=os.getenv("DB_PATH","deals.db")
@@ -32,6 +33,10 @@ def hot(limit:int=50):
                       ORDER BY advance_pct DESC, created_at DESC LIMIT ?""",(min_r,max_r,float(os.getenv("DEAL_MIN_ADVANCE_PCT","20")),limit)).fetchall()
     c.close()
     return [dict(r) for r in rows]
+
+@app.post("/api/review")
+def api_review(limit:int=30):
+    return review_unknown(DB,limit)
 
 @app.get("/api/buyers")
 def buyers(limit:int=100):

@@ -11,7 +11,7 @@ from .ingest import refresh
 
 load_dotenv()
 DB=os.getenv("DB_PATH","deals.db")
-app=FastAPI(title="DealFinder Mobile v4-TEKHSTROY")
+app=FastAPI(title="DealFinder Mobile v5-TEKHSTROY")
 
 class Buyer(BaseModel):
     source:str; external_id:str|None=None; title:str; description:str=""; url:str=""; contact:str=""; budget_rub:float|None=None; city:str=""
@@ -23,6 +23,10 @@ class Match(BaseModel):
 @app.on_event("startup")
 def startup():
     connect(DB).close()
+    try:
+        refresh()
+    except Exception:
+        pass
 
 @app.get("/api/hot")
 def hot(limit:int=50):
@@ -45,7 +49,7 @@ def suppliers(limit:int=100):
 
 @app.get("/api/version")
 def version():
-    return {"version":"v4-TEKHSTROY","source":"GosPlan API v2","gosplan":"enabled","advance_min_pct":float(os.getenv("DEAL_MIN_ADVANCE_PCT","20")),"profile":"ТЕХСТРОЙ","manual_refresh":True}
+    return {"version":"v5-TEKHSTROY","source":"GosPlan API v2","gosplan":"enabled","advance_min_pct":float(os.getenv("DEAL_MIN_ADVANCE_PCT","20")),"profile":"ТЕХСТРОЙ","manual_refresh":True}
 
 @app.get("/api/stats")
 def stats():

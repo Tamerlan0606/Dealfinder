@@ -17,7 +17,20 @@ CREATE TABLE IF NOT EXISTS matches(id INTEGER PRIMARY KEY AUTOINCREMENT,buyer_id
 def connect(path=None):
  if path is None:
   path=os.getenv("DB_PATH") or ("/data/deals.db" if os.path.isdir("/data") else "deals.db")
- c=sqlite3.connect(path); c.row_factory=sqlite3.Row; c.executescript(SCHEMA)
+ # Render may expose DB_PATH before the persistent disk directory is mounted.
+ # Create the parent directory when possible; otherwise fall back to a writable local DB.
+ parent=os.path.dirname(path)
+ if parent:
+  try:
+   os.makedirs(parent, exist_ok=True)
+  except OSError:
+   path="deals.db"
+ try:
+  c=sqlite3.connect(path)
+ except sqlite3.OperationalError:
+  path="deals.db"
+  c=sqlite3.connect(path)
+ c.row_factory=sqlite3.Row; c.executescript(SCHEMA)
  cols={r[1] for r in c.execute("PRAGMA table_info(buyers)").fetchall()}
  migrations={
   "advance_pct":"ALTER TABLE buyers ADD COLUMN advance_pct REAL",

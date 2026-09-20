@@ -10,7 +10,7 @@ services:
       sizeGB: 1
     envVars:
       - key: DRY_RUN
-        value: "true"
+        value: "false"
       - key: MIN_MARGIN_RUB
         value: "200000"
       - key: MIN_MARGIN_PCT

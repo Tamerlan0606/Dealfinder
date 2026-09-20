@@ -210,7 +210,7 @@ def refresh():
                         if not ok:
                             diag[{"регион":"region","вне профиля":"exclude","НМЦК":"price","обеспечение выше лимита БГ":"security","опыт не подтвержден профилем":"experience","срок подачи истек":"deadline"}.get(reason,"advance" if reason.startswith("аванс") else "exclude")]+=1
                             continue
-                        blob=_text(item).lower();price=_price(item);adv=_advance(item,blob,price);status="ЗАХОДИМ" if adv is not None and adv>=MIN_ADV else "ПРОВЕРИТЬ АВАНС"
+                        blob=_text(item).lower();price=_price(item);adv=_advance(item,blob,price);sec=_security(item,blob,price);status="ЗАХОДИМ" if adv is not None and adv>=MIN_ADV else "ПРОВЕРИТЬ АВАНС"
                         if status=="ЗАХОДИМ":diag["accepted"]+=1
                         deadline=_deadline(item,blob)
                         db.execute("""INSERT INTO buyers(source,external_id,title,description,url,contact,budget_rub,city,advance_pct,advance_rub,deadline,procurement_type,sro_required,experience_required,security_rub,fit_status,fit_reasons)

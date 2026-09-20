@@ -234,8 +234,13 @@ def refresh():
                             retry=cooldown
                         _RATE_LIMITED_UNTIL=time.time()+retry
                         _RATE_LIMITED_REASON=f"GosPlan HTTP 429: rate limit; следующая попытка через {retry} сек."
+                        # GosPlan временно ограничил API. Не блокируем ручное обновление:
+                        # сразу переключаемся на публичный RSS ЕИС.
                         db.rollback()
-                        return {"status":"rate_limited","loaded":loaded,"raw":raw,"pages":pages,"source":"gosplan_v2","server":base,"api_mode":"test" if not api_key else "production","http_status":429,"retry_after":retry,"error":_RATE_LIMITED_REASON,"diagnostics":diag}
+                        fb=_rss_fallback(db)
+                        if fb.get("loaded",0):
+                            return {"status":"fallback","loaded":fb["loaded"],"raw":raw+fb.get("raw",0),"pages":pages,"source":"eis_rss_fallback","server":"zakupki.gov.ru","api_mode":"public_rss","http_status":429,"retry_after":retry,"warning":_RATE_LIMITED_REASON,"diagnostics":diag}
+                        return {"status":"rate_limited","loaded":0,"raw":raw,"pages":pages,"source":"gosplan_v2","server":base,"api_mode":"test" if not api_key else "production","http_status":429,"retry_after":retry,"error":_RATE_LIMITED_REASON,"diagnostics":diag}
                     if r.status_code==422 and page>0:
                         break
                     r.raise_for_status()

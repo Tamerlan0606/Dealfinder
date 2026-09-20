@@ -3,7 +3,7 @@ from datetime import datetime
 import httpx
 from .db import connect
 
-API = os.getenv("GOSPLAN_API_URL", "https://v2test.gosplan.info/fz44/purchases")
+API = os.getenv("GOSPLAN_API_URL", "https://fz44test.gosplan.info/fz44/purchases")
 REGIONS = [x.strip().lower() for x in os.getenv(
     "DEAL_REGIONS",
     "Ростовская область,Ставропольский край,Республика Ингушетия,Кабардино-Балкарская Республика,Республика Северная Осетия — Алания,Краснодарский край,Москва,Московская область"

@@ -155,6 +155,7 @@ def _start_manual_refresh():
         return False
     def worker():
         global _last_bg_error, _last_bg_result
+        result={"status":"error","error":"refresh did not start"}
         try:
             result=refresh()
             _last_bg_result=result

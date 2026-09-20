@@ -27,16 +27,45 @@ def startup():
     if os.getenv("AUTO_REFRESH","true").lower()=="true":
         threading.Thread(target=_background_refresh, daemon=True).start()
 
+_last_bg_error = None
+_last_bg_result = None
+_refresh_lock = threading.Lock()
+
 def _background_refresh():
+    global _last_bg_error, _last_bg_result
     time.sleep(3)
     while True:
         try:
-            result=refresh()
-            if result.get("status")=="ok" and os.getenv("AUTO_REVIEW","true").lower()=="true":
-                review_unknown(DB,int(os.getenv("AUTO_REVIEW_LIMIT","20")))
-        except Exception:
-            pass
+            with _refresh_lock:
+                result = refresh()
+            _last_bg_result = result
+            if result.get("status") == "ok":
+                _last_bg_error = None
+                if os.getenv("AUTO_REVIEW","true").lower()=="true":
+                    review_unknown(DB, int(os.getenv("AUTO_REVIEW_LIMIT","20")))
+            else:
+                _last_bg_error = result.get("error") or "refresh returned non-ok"
+        except Exception as e:
+            _last_bg_error = f"{type(e).__name__}: {e}"
         time.sleep(int(os.getenv("REFRESH_SECONDS","3600")))
+
+def _run_refresh_once():
+    global _last_bg_error, _last_bg_result
+    with _refresh_lock:
+        result = refresh()
+    _last_bg_result = result
+    if result.get("status") == "ok":
+        _last_bg_error = None
+        if os.getenv("AUTO_REVIEW","true").lower()=="true":
+            try:
+                result = dict(result)
+                result["review"] = review_unknown(DB, int(os.getenv("AUTO_REVIEW_LIMIT","20")))
+            except Exception as e:
+                result = dict(result)
+                result["review_error"] = f"{type(e).__name__}: {e}"
+    else:
+        _last_bg_error = result.get("error") or "refresh returned non-ok"
+    return result
 
 @app.get("/api/hot")
 def hot(limit:int=50):
@@ -93,7 +122,7 @@ def health():
 
 @app.get("/api/version")
 def version():
-    return {"version":"v5-TEKHSTROY","source":"GosPlan API v2","gosplan":"enabled","advance_min_pct":float(os.getenv("DEAL_MIN_ADVANCE_PCT","20")),"profile":"ТЕХСТРОЙ","experience_contracts":9,"experience_total_rub":101822407.84,"manual_refresh":True}
+    return {"version":"v5-TEKHSTROY","source":"GosPlan API v2","gosplan":"enabled","advance_min_pct":20.0,"profile":"ТЕХСТРОЙ","experience_contracts":9,"experience_total_rub":101822407.84,"manual_refresh":True}
 
 @app.get("/api/stats")
 def stats():
@@ -107,48 +136,66 @@ def stats():
 
 @app.post("/api/refresh")
 def api_refresh():
-    result=refresh()
-    if result.get("status")=="ok" and os.getenv("AUTO_REVIEW","true").lower()=="true":
-        result["review"]=review_unknown(DB,int(os.getenv("AUTO_REVIEW_LIMIT","20")))
-    return result
+    return _run_refresh_once()
 
 @app.get("/api/diagnostics")
 def diagnostics():
     c=connect(DB)
     total=c.execute("SELECT count(*) n FROM buyers").fetchone()["n"]
     hot=c.execute("SELECT count(*) n FROM buyers WHERE fit_status='ЗАХОДИМ'").fetchone()["n"]
+    by_status={}
+    for row in c.execute("SELECT fit_status, count(*) n FROM buyers GROUP BY fit_status").fetchall():
+        by_status[row["fit_status"] or "null"] = row["n"]
     c.close()
-    return {"status":"ok","db_path":DB,"buyers":total,"hot":hot,"api_key_configured":bool(os.getenv("GOSPLAN_API_KEY","").strip()),"endpoints":os.getenv("GOSPLAN_ENDPOINTS","/fz44/purchases,/fz223/purchases").split(","),"min_rub":float(os.getenv("DEAL_MIN_RUB","10000000")),"max_rub":float(os.getenv("DEAL_MAX_RUB","90000000")),"min_advance_pct":float(os.getenv("DEAL_MIN_ADVANCE_PCT","20")),"bg_limit_rub":float(os.getenv("DEAL_BG_LIMIT_RUB","17000000"))}
+    return {
+        "status":"ok",
+        "db_path":DB,
+        "buyers":total,
+        "hot":hot,
+        "by_fit_status":by_status,
+        "api_key_configured":bool(os.getenv("GOSPLAN_API_KEY","").strip()),
+        "endpoints":os.getenv("GOSPLAN_ENDPOINTS","/fz44/purchases,/fz223/purchases").split(","),
+        "min_rub":float(os.getenv("DEAL_MIN_RUB","10000000")),
+        "max_rub":float(os.getenv("DEAL_MAX_RUB","90000000")),
+        "min_advance_pct":float(os.getenv("DEAL_MIN_ADVANCE_PCT","20")),
+        "bg_limit_rub":float(os.getenv("DEAL_BG_LIMIT_RUB","17000000")),
+        "last_bg_error":_last_bg_error,
+        "last_bg_result":{k:_last_bg_result.get(k) for k in ("status","loaded","raw","pages","source","server","api_mode","error","diagnostics") if _last_bg_result and k in _last_bg_result} if _last_bg_result else None,
+    }
 
 @app.post("/buyers")
-def buyer(x:Buyer):
+def buyer(b:Buyer):
     c=connect(DB)
-    c.execute("INSERT OR IGNORE INTO buyers(source,external_id,title,description,url,contact,budget_rub,city) VALUES(?,?,?,?,?,?,?,?)",
-              (x.source,x.external_id,x.title,x.description,x.url,x.contact,x.budget_rub,x.city)); c.commit()
-    r=c.execute("SELECT * FROM buyers WHERE source=? AND external_id=?",(x.source,x.external_id)).fetchone(); c.close()
-    return dict(r)
+    c.execute("INSERT INTO buyers(source,external_id,title,description,url,contact,budget_rub,city) VALUES(?,?,?,?,?,?,?,?)",
+              (b.source,b.external_id,b.title,b.description,b.url,b.contact,b.budget_rub,b.city))
+    c.commit(); cid=c.execute("SELECT last_insert_rowid()").fetchone()[0]; c.close()
+    return {"id":cid}
 
 @app.post("/suppliers")
-def supplier(x:Supplier):
-    c=connect(DB); cur=c.execute("INSERT INTO suppliers(name,website,email,phone,categories) VALUES(?,?,?,?,?)",(x.name,x.website,x.email,x.phone,x.categories)); c.commit()
-    r=c.execute("SELECT * FROM suppliers WHERE id=?",(cur.lastrowid,)).fetchone(); c.close(); return dict(r)
+def supplier(s:Supplier):
+    c=connect(DB)
+    c.execute("INSERT INTO suppliers(name,website,email,phone,categories) VALUES(?,?,?,?,?)",(s.name,s.website,s.email,s.phone,s.categories))
+    c.commit(); cid=c.execute("SELECT last_insert_rowid()").fetchone()[0]; c.close()
+    return {"id":cid}
 
 @app.post("/match")
-def match(x:Match):
-    c=connect(DB); b=c.execute("SELECT * FROM buyers WHERE id=?",(x.buyer_id,)).fetchone(); s=c.execute("SELECT * FROM suppliers WHERE id=?",(x.supplier_id,)).fetchone()
-    if not b or not s: c.close(); return {"error":"not found"}
-    e=calc(b["budget_rub"],x.buy_rub,x.logistics_rub)
-    hot=e and e["margin_rub"]>=float(os.getenv("MIN_MARGIN_RUB","200000")) and e["margin_pct"]>=float(os.getenv("MIN_MARGIN_PCT","10"))
-    status="hot" if hot else "watch"
-    c.execute("INSERT OR REPLACE INTO matches(buyer_id,supplier_id,buy_rub,sell_rub,margin_rub,margin_pct,status) VALUES(?,?,?,?,?,?,?)",(x.buyer_id,x.supplier_id,x.buy_rub,b["budget_rub"],e["margin_rub"],e["margin_pct"],status)); c.commit(); c.close()
-    if hot: notify(f"🔥 ГОРЯЧАЯ СДЕЛКА\n{b['title']}\n{b['url']}")
-    return {"status":status,"economics":e,"buyer":dict(b),"supplier":dict(s)}
+def match(m:Match):
+    c=connect(DB)
+    b=c.execute("SELECT * FROM buyers WHERE id=?",(m.buyer_id,)).fetchone()
+    if not b: c.close(); return {"error":"buyer not found"}
+    e=calc(b["budget_rub"],m.buy_rub,m.logistics_rub)
+    if not e: c.close(); return {"error":"bad numbers"}
+    c.execute("INSERT OR REPLACE INTO matches(buyer_id,supplier_id,buy_rub,sell_rub,margin_rub,margin_pct,status) VALUES(?,?,?,?,?,?,?)",
+              (m.buyer_id,m.supplier_id,m.buy_rub,b["budget_rub"],e["margin_rub"],e["margin_pct"],"new"))
+    c.commit(); c.close()
+    return e
 
 @app.post("/outreach")
-def outreach(to:str,subject:str,body:str): return send(to,subject,body)
+def outreach(to:str, subject:str, body:str):
+    return send(to,subject,body)
 
 @app.get("/", response_class=HTMLResponse)
-def dashboard():
+def home():
     return '''<!doctype html><html lang="ru"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>DealFinder — ТЕХСТРОЙ</title><style>
 body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#f5f5f7;margin:0;color:#111}.wrap{max-width:760px;margin:auto;padding:16px}

@@ -4,6 +4,10 @@ services:
     runtime: python
     buildCommand: pip install -r requirements.txt
     startCommand: python -m uvicorn run:app --host 0.0.0.0 --port $PORT
+    disk:
+      name: dealfinder-data
+      mountPath: /data
+      sizeGB: 1
     envVars:
       - key: DRY_RUN
         value: "true"
@@ -12,7 +16,11 @@ services:
       - key: MIN_MARGIN_PCT
         value: "10"
       - key: DB_PATH
-        value: "/tmp/deals.db"
+        value: "/data/deals.db"
+      - key: GOSPLAN_ENDPOINTS
+        value: "/fz44/purchases,/fz223/purchases"
+      - key: GOSPLAN_MAX_PAGES
+        value: "20"
       - key: REFRESH_SECONDS
         value: "3600"
       - key: GOSPLAN_API_KEY

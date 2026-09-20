@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS buyers(
  id INTEGER PRIMARY KEY AUTOINCREMENT,
  source TEXT, external_id TEXT, title TEXT, description TEXT, url TEXT, contact TEXT,
  budget_rub REAL, city TEXT, advance_pct REAL, advance_rub REAL, deadline TEXT,
- procurement_type TEXT, sro_required TEXT, experience_required TEXT,
+ procurement_type TEXT, sro_required TEXT, experience_required TEXT, security_rub REAL, document_links TEXT, document_text TEXT, economics_json TEXT,
  fit_status TEXT DEFAULT 'ЗАХОДИМ', fit_reasons TEXT,
  created_at TEXT DEFAULT CURRENT_TIMESTAMP, UNIQUE(source,external_id)
 );
@@ -26,7 +26,11 @@ def connect(path='deals.db'):
   "fit_status":"ALTER TABLE buyers ADD COLUMN fit_status TEXT DEFAULT 'ЗАХОДИМ'",
   "fit_reasons":"ALTER TABLE buyers ADD COLUMN fit_reasons TEXT",
   "review_status":"ALTER TABLE buyers ADD COLUMN review_status TEXT DEFAULT 'new'",
-  "reviewed_at":"ALTER TABLE buyers ADD COLUMN reviewed_at TEXT"
+  "reviewed_at":"ALTER TABLE buyers ADD COLUMN reviewed_at TEXT",
+  "security_rub":"ALTER TABLE buyers ADD COLUMN security_rub REAL",
+  "document_links":"ALTER TABLE buyers ADD COLUMN document_links TEXT",
+  "document_text":"ALTER TABLE buyers ADD COLUMN document_text TEXT",
+  "economics_json":"ALTER TABLE buyers ADD COLUMN economics_json TEXT"
  }
  for col,sql in migrations.items():
   if col not in cols: c.execute(sql)

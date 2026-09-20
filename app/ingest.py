@@ -330,18 +330,35 @@ def _rss_fallback(db):
                 root=ET.fromstring(r.text)
                 entries=root.findall('.//item')
                 for entry in entries[:100]:
-                    raw+=1; title=(entry.findtext('title') or '').strip(); desc=(entry.findtext('description') or '').strip(); link_url=(entry.findtext('link') or '').strip()
-                    blob=(title+' '+desc).lower(); m=re.search(r'(\d{19,25})',blob); ext=m.group(1) if m else link_url
+                    raw+=1
+                    title=(entry.findtext('title') or '').strip()
+                    desc=(entry.findtext('description') or '').strip()
+                    link_url=(entry.findtext('link') or '').strip()
+                    blob=(title+' '+desc).lower()
+                    m=re.search(r'(\d{19,25})',blob); ext=m.group(1) if m else link_url
                     if not ext or ext in seen: continue
                     seen.add(ext); price=_price_from_rss(blob)
                     if not price or any(x in blob for x in EXCLUDE_KEYWORDS) or not any(x in blob for x in KEYWORDS): continue
                     adv=_advance_from_rss(blob,price)
+                    deadline=_parse_date(blob)
+                    city=next((r for r in REGIONS if r in blob), "")
+                    ptype="223-ФЗ" if "223-фз" in blob or "223 фз" in blob else "44-ФЗ"
                     status="ЗАХОДИМ" if adv is not None and adv>=MIN_ADV else ("ОТБОЙ" if adv is not None else "ПРОВЕРИТЬ АВАНС")
                     reason="RSS: аванс подтвержден" if status=="ЗАХОДИМ" else ("RSS: аванс ниже лимита" if status=="ОТБОЙ" else "RSS; требуется проверка карточки")
                     if status=="ОТБОЙ": continue
-                    db.execute('INSERT OR IGNORE INTO buyers(source,external_id,title,description,url,contact,budget_rub,city,advance_pct,advance_rub,fit_status,fit_reasons) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',('eis_rss',ext,title,desc,link_url,'',price,'',adv,(price*adv/100 if adv is not None else None),status,reason)); loaded+=1
+                    if deadline:
+                        try:
+                            if datetime.strptime(deadline,"%Y-%m-%d").replace(tzinfo=timezone.utc) < datetime.now(timezone.utc):
+                                continue
+                        except Exception: pass
+                    db.execute('''INSERT INTO buyers(source,external_id,title,description,url,contact,budget_rub,city,advance_pct,advance_rub,deadline,procurement_type,fit_status,fit_reasons)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+ON CONFLICT(source,external_id) DO UPDATE SET title=excluded.title,description=excluded.description,url=excluded.url,budget_rub=excluded.budget_rub,city=excluded.city,advance_pct=excluded.advance_pct,advance_rub=excluded.advance_rub,deadline=excluded.deadline,procurement_type=excluded.procurement_type,fit_status=excluded.fit_status,fit_reasons=excluded.fit_reasons''',
+                               ('eis_rss',ext,title,desc,link_url,'',price,city,adv,(price*adv/100 if adv is not None else None),deadline,ptype,status,reason))
+                    loaded+=1
         db.commit()
     except Exception as e:
         return {'loaded':loaded,'raw':raw,'error':str(e)}
     return {'loaded':loaded,'raw':raw}
+
 def start_loop():return None

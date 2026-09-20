@@ -23,7 +23,7 @@ class Match(BaseModel):
 @app.on_event("startup")
 def startup():
     connect(DB).close()
-    start_loop()
+
 
 @app.get("/api/hot")
 def hot(limit:int=50):

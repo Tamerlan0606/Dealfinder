@@ -32,6 +32,20 @@ _last_bg_error = None
 _last_bg_result = None
 _refresh_lock = threading.Lock()
 
+def _run_review_background(result):
+    global _last_bg_result
+    if result.get("status") not in ("ok","fallback") or os.getenv("AUTO_REVIEW","true").lower()!="true":
+        return
+    try:
+        reviewed=review_unknown(DB, int(os.getenv("AUTO_REVIEW_LIMIT","20")))
+        current=dict(_last_bg_result or result)
+        current["review"]=reviewed
+        _last_bg_result=current
+    except Exception as e:
+        current=dict(_last_bg_result or result)
+        current["review_error"]=f"{type(e).__name__}: {e}"
+        _last_bg_result=current
+
 def _background_refresh():
     global _last_bg_error, _last_bg_result
     time.sleep(3)
@@ -43,7 +57,7 @@ def _background_refresh():
             if result.get("status") in ("ok","fallback"):
                 _last_bg_error = None
                 if os.getenv("AUTO_REVIEW","true").lower()=="true":
-                    review_unknown(DB, int(os.getenv("AUTO_REVIEW_LIMIT","20")))
+                    threading.Thread(target=_run_review_background,args=(result,),daemon=True).start()
             else:
                 _last_bg_error = result.get("error") or "refresh returned non-ok"
         except Exception as e:
@@ -146,14 +160,6 @@ def _start_manual_refresh():
             _last_bg_result=result
             if result.get("status") in ("ok","fallback"):
                 _last_bg_error=None
-                if os.getenv("AUTO_REVIEW","true").lower()=="true":
-                    try:
-                        result=dict(result)
-                        result["review"]=review_unknown(DB,int(os.getenv("AUTO_REVIEW_LIMIT","20")))
-                        _last_bg_result=result
-                    except Exception as e:
-                        _last_bg_result=dict(result)
-                        _last_bg_result["review_error"]=f"{type(e).__name__}: {e}"
             else:
                 _last_bg_error=result.get("error") or "refresh returned non-ok"
         except Exception as e:
@@ -161,6 +167,8 @@ def _start_manual_refresh():
             _last_bg_result={"status":"error","error":_last_bg_error}
         finally:
             _refresh_lock.release()
+        if result.get("status") in ("ok","fallback") and os.getenv("AUTO_REVIEW","true").lower()=="true":
+            threading.Thread(target=_run_review_background,args=(result,),daemon=True).start()
     threading.Thread(target=worker,daemon=True).start()
     return True
 

@@ -1,6 +1,8 @@
 import os, re, time
 from datetime import datetime, timezone
 import httpx
+from urllib.parse import quote
+import feedparser
 from .db import connect
 
 REGIONS=[x.strip().lower() for x in os.getenv("DEAL_REGIONS","Ростовская область,Ставропольский край,Республика Ингушетия,Кабардино-Балкарская Республика,Республика Северная Осетия — Алания,Краснодарский край,Москва,Московская область").split(",") if x.strip()]
@@ -219,10 +221,40 @@ ON CONFLICT(source,external_id) DO UPDATE SET title=excluded.title,description=e
                             ("gosplan_v2"+endpoint,ext,_title(item),blob[:6000],_url(item,ext),"",price,"",adv,(price*adv/100 if adv is not None else None),deadline,_type(item,blob),_sro(blob),_experience(blob),sec,status,reason));loaded+=1
                     if len(items)<10:break
         db.commit()
+        if loaded==0:
+            fb=_rss_fallback(db); loaded += fb['loaded']; raw += fb['raw']
         return {"status":"ok","loaded":loaded,"raw":raw,"pages":pages,"source":"gosplan_v2","server":base,"advance_min_pct":MIN_ADV,"bg_limit_rub":MAX_BG,"pricing":"5% ниже НМЦК; налог 7%","api_mode":"production" if api_key else "test","diagnostics":diag,"updated_at":datetime.now(timezone.utc).isoformat()}
     except Exception as e:
         db.rollback()
-        return {"status":"error","loaded":loaded,"raw":raw,"pages":pages,"error":str(e),"source":"gosplan_v2","server":base,"api_mode":"production" if api_key else "test","diagnostics":diag}
+        fb=_rss_fallback(db)
+        return {'status':'ok' if fb['loaded'] else 'error','loaded':fb['loaded'],'raw':raw+fb['raw'],'pages':pages,'error':str(e) if not fb['loaded'] else None,'source':'eis_rss_fallback','server':'zakupki.gov.ru','api_mode':'public_rss','diagnostics':diag}
     finally:db.close()
 
+def _price_from_rss(blob):
+    nums=[]
+    for x in re.findall(r'\d[\d\s]*(?:[.,]\d+)?',blob):
+        n=_num(x)
+        if n and MIN_RUB<=n<=MAX_RUB: nums.append(n)
+    return max(nums) if nums else None
+
+def _rss_fallback(db):
+    loaded=raw=0; seen=set()
+    keywords=['благоустройство','уборка территорий','клининг','снег','очистка крыш','ремонт кровли','озеленение','ремонт зданий','строительство']
+    base='https://zakupki.gov.ru/epz/order/extendedsearch/rss.html'
+    try:
+        with httpx.Client(timeout=35,follow_redirects=True,headers={'User-Agent':'DealFinder/6.1'}) as client:
+            for kw in keywords:
+                r=client.get(base+'?searchString='+quote(kw)+'&morphology=on&pageNumber=1')
+                if r.status_code>=400: continue
+                feed=feedparser.parse(r.text)
+                for entry in feed.entries[:100]:
+                    raw+=1; title=str(getattr(entry,'title','') or '').strip(); desc=str(getattr(entry,'description','') or '').strip(); link_url=str(getattr(entry,'link','') or '').strip()
+                    blob=(title+' '+desc).lower(); m=re.search(r'(\d{19,25})',blob); ext=m.group(1) if m else link_url
+                    if not ext or ext in seen: continue
+                    seen.add(ext); price=_price_from_rss(blob)
+                    if not price or any(x in blob for x in EXCLUDE_KEYWORDS) or not any(x in blob for x in KEYWORDS): continue
+                    db.execute('INSERT OR IGNORE INTO buyers(source,external_id,title,description,url,contact,budget_rub,city,advance_pct,fit_status,fit_reasons) VALUES(?,?,?,?,?,?,?,?,?,?,?)',('eis_rss',ext,title,desc,link_url,'',price,'',None,'ПРОВЕРИТЬ АВАНС','RSS; требуется проверка карточки')); loaded+=1
+        db.commit()
+    except Exception: pass
+    return {'loaded':loaded,'raw':raw}
 def start_loop():return None

@@ -11,7 +11,7 @@ from .ingest import refresh, start_loop
 
 load_dotenv()
 DB=os.getenv("DB_PATH","deals.db")
-app=FastAPI(title="DealFinder Mobile")
+app=FastAPI(title="DealFinder Mobile v2-EIS")
 
 class Buyer(BaseModel):
     source:str; external_id:str|None=None; title:str; description:str=""; url:str=""; contact:str=""; budget_rub:float|None=None; city:str=""
@@ -43,6 +43,10 @@ def buyers(limit:int=100):
 def suppliers(limit:int=100):
     c=connect(DB); rows=c.execute("SELECT * FROM suppliers ORDER BY created_at DESC LIMIT ?",(limit,)).fetchall(); c.close()
     return [dict(r) for r in rows]
+
+@app.get("/api/version")
+def version():
+    return {"version":"v2-EIS","source":"zakupki.gov.ru","gosplan":"disabled"}
 
 @app.get("/api/stats")
 def stats():
@@ -88,7 +92,7 @@ def outreach(to:str,subject:str,body:str): return send(to,subject,body)
 @app.get("/", response_class=HTMLResponse)
 def dashboard():
     return '''<!doctype html><html lang="ru"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>DealFinder</title><style>
+<title>DealFinder v2-EIS</title><style>
 body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#f5f5f7;margin:0;color:#111}.wrap{max-width:760px;margin:auto;padding:16px}
 .head{display:flex;justify-content:space-between;align-items:center}.badge{background:#111;color:#fff;padding:6px 10px;border-radius:20px;font-size:12px}
 .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.stat,.card{background:#fff;border-radius:16px;padding:14px;margin-top:10px;box-shadow:0 1px 4px #0001}

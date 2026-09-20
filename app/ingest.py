@@ -3,208 +3,64 @@ from datetime import datetime
 import httpx
 from .db import connect
 
-API = os.getenv("GOSPLAN_API_URL", "https://v2test.gosplan.info/fz44/purchases")
-REGIONS = [x.strip().lower() for x in os.getenv(
-    "DEAL_REGIONS",
-    "Ростовская область,Ставропольский край,Республика Ингушетия,Кабардино-Балкарская Республика,Республика Северная Осетия — Алания,Краснодарский край,Москва,Московская область"
-).split(",") if x.strip()]
-KEYWORDS = [x.strip().lower() for x in os.getenv(
-    "DEAL_KEYWORDS",
-    "благоустройство,строитель,капитальн,ремонт,кровл,фасад,монтаж,дорог,озелен,площадк,тротуар,освещен,водопровод,канализац,теплоснабж,электромонтаж"
-).split(",") if x.strip()]
-MIN_RUB = float(os.getenv("DEAL_MIN_RUB", "10000000"))
-MAX_RUB = float(os.getenv("DEAL_MAX_RUB", "90000000"))
-
-def _pick(obj, keys):
-    wanted = {k.lower() for k in keys}
-    if isinstance(obj, dict):
-        for k, v in obj.items():
-            if k.lower() in wanted and v not in (None, ""):
-                return v
-        for v in obj.values():
-            r = _pick(v, keys)
-            if r not in (None, ""):
-                return r
-    elif isinstance(obj, list):
-        for v in obj:
-            r = _pick(v, keys)
-            if r not in (None, ""):
-                return r
-    return None
-
-def _text(obj):
-    if isinstance(obj, str):
-        return obj
-    if isinstance(obj, dict):
-        return " ".join(_text(v) for v in obj.values())
-    if isinstance(obj, list):
-        return " ".join(_text(v) for v in obj)
-    return str(obj or "")
+REGIONS = [x.strip().lower() for x in os.getenv("DEAL_REGIONS","Ростовская область,Ставропольский край,Республика Ингушетия,Кабардино-Балкарская Республика,Республика Северная Осетия — Алания,Краснодарский край,Москва,Московская область").split(",") if x.strip()]
+KEYWORDS = [x.strip().lower() for x in os.getenv("DEAL_KEYWORDS","благоустройство,строитель,капитальн,ремонт,кровл,фасад,монтаж,дорог,озелен,площадк,тротуар,освещен,водопровод,канализац,теплоснабж,электромонтаж").split(",") if x.strip()]
+MIN_RUB=float(os.getenv("DEAL_MIN_RUB","10000000"))
+MAX_RUB=float(os.getenv("DEAL_MAX_RUB","90000000"))
 
 def _num(v):
-    if isinstance(v, (int, float)):
-        return float(v)
-    if not v:
-        return None
-    s = re.sub(r"[^0-9,.-]", "", str(v).replace("\xa0", ""))
-    s = s.replace(",", ".")
-    try:
-        return float(s)
-    except Exception:
-        return None
-
-def _items(data):
-    if isinstance(data, list):
-        return data
-    if isinstance(data, dict):
-        for k in ("items", "results", "purchases", "data", "result", "content"):
-            v = data.get(k)
-            if isinstance(v, list):
-                return v
-            if isinstance(v, (dict, list)):
-                found = _items(v)
-                if found:
-                    return found
-        for v in data.values():
-            if isinstance(v, (dict, list)):
-                found = _items(v)
-                if found:
-                    return found
-    return []
-
-def _eis_fallback():
-    import urllib.parse, re
-    headers={"User-Agent":"Mozilla/5.0 (compatible; DealFinder/1.0)"}
-    out=[]
-    seen=set()
-    for kw in KEYWORDS[:8]:
-        q=urllib.parse.quote(kw)
-        url="https://zakupki.gov.ru/epz/order/extendedsearch/results.html?searchString="+q
-        try:
-            rr=httpx.get(url,headers=headers,timeout=20,follow_redirects=True)
-            if rr.status_code != 200:
-                continue
-            for m in re.finditer(r'href=["\\']([^"\\']*common-info[^"\\']*)["\\']',rr.text,re.I):
-                link=m.group(1)
-                if link.startswith("/"):
-                    link="https://zakupki.gov.ru"+link
-                n=re.search(r"regNumber[=/]([0-9]{10,})",link)
-                if n and n.group(1) not in seen:
-                    seen.add(n.group(1))
-                    out.append((n.group(1),kw,link))
-        except Exception:
-            pass
-    return out
+    if isinstance(v,(int,float)): return float(v)
+    try: return float(re.sub(r"[^0-9.]","",str(v).replace("\xa0","").replace(" ","").replace(",", ".")))
+    except: return None
 
 def refresh():
-    # Primary source: public EIS web search. GosPlan API is intentionally disabled
-    # because its shared sandbox rate limit returns HTTP 429 for this deployment.
-    db = connect(os.getenv("DB_PATH", "deals.db"))
-    return _refresh_eis(db)
-
-def _refresh_eis(db):
-    import urllib.parse
-    headers={"User-Agent":"Mozilla/5.0 (iPhone; CPU iPhone OS 18_3_1 like Mac OS X) AppleWebKit/605.1.15 Safari/605.1.15"}
-    loaded=0
-    raw=0
-    for kw in KEYWORDS[:12]:
-        q=urllib.parse.quote(kw)
-        url="https://zakupki.gov.ru/epz/order/extendedsearch/results.html?searchString="+q+"&morphology=on&search-filter=Дате+размещения"
-        try:
-            r=httpx.get(url,headers=headers,timeout=30,follow_redirects=True)
-            if r.status_code != 200:
-                continue
-            text=r.text
-            # Extract notice links and nearby visible text from EIS result cards.
-            import re
-            matches=list(re.finditer(r'href=["\\']([^"\\']*common-info[^"\\']*)["\\']',text,re.I))
-            raw += len(matches)
-            for m in matches[:100]:
-                link=m.group(1)
-                if link.startswith("/"): link="https://zakupki.gov.ru"+link
-                nm=re.search(r'regNumber[=/]([0-9]{10,})',link)
-                if not nm: continue
-                ext=nm.group(1)
-                start=max(0,m.start()-2500); end=min(len(text),m.end()+2500)
-                chunk=re.sub(r'<[^>]+>',' ',text[start:end])
-                chunk=re.sub(r'&nbsp;|\\s+',' ',chunk).strip()
-                low=chunk.lower()
-                if REGIONS and not any(x in low for x in REGIONS): continue
-                if not any(x in low for x in KEYWORDS): continue
-                nums=re.findall(r'(?<![0-9])([1-9][0-9]{6,10}(?:[.,][0-9]{1,2})?)(?![0-9])',chunk.replace(" ","").replace("\\xa0",""))
-                price=None
-                for n in nums:
-                    v=_num(n)
-                    if v and MIN_RUB <= v <= MAX_RUB:
-                        price=v; break
-                if not price: continue
-                title=re.sub(r'\\s+',' ',chunk)[:500]
-                db.execute("INSERT INTO buyers(source,external_id,title,description,url,contact,budget_rub,city) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(source,external_id) DO UPDATE SET title=excluded.title,description=excluded.description,url=excluded.url,budget_rub=excluded.budget_rub,city=excluded.city",("eis_public",ext,title,chunk[:1500],link,"",price,""))
-                loaded += 1
-        except Exception:
-            continue
-    db.commit()
-    return {"status":"ok","loaded":loaded,"source":"eis_public","raw":raw}
+    db=connect(os.getenv("DB_PATH","deals.db"))
+    loaded=0; raw=0; pages=0
+    headers={"User-Agent":"Mozilla/5.0 (compatible; DealFinder/2.0)"}
     try:
-        r = httpx.get(API, params={"limit": 10, "skip": 0, "sort": "published_at_desc"}, timeout=30, follow_redirects=True, headers={"User-Agent":"DealFinder/1.0"})
-        r.raise_for_status()
-        data = r.json()
-        items = _items(data)
-        count = 0
-        stats = {"raw": len(items), "price_ok": 0, "keyword_ok": 0, "region_ok": 0}
-        for item in items:
-            blob = _text(item)
-            title = _pick(item, ["title","name","subject","purchase_name","short_description","description"])
-            title = str(title or "").strip()
-            price = _num(_pick(item, ["max_price","initial_max_price","nmck","nmc","price","maximum_price"]))
-            ext = _pick(item, ["purchase_number","registry_number","number","id"])
-            url = _pick(item, ["url","href","notice_url","purchase_url"])
-            region = str(_pick(item, ["region","region_name","customer_region","location","subject"]) or "").strip()
-            if not title or not ext or not price or price < MIN_RUB or price > MAX_RUB:
-                continue
-            stats["price_ok"] += 1
-            low = (title + " " + blob).lower()
-            if not any(k in low for k in KEYWORDS):
-                continue
-            stats["keyword_ok"] += 1
-            if REGIONS and region and not any(rg in (region + " " + blob).lower() for rg in REGIONS):
-                continue
-            stats["region_ok"] += 1
-            if not url:
-                url = f"https://zakupki.gov.ru/epz/order/notice/ea20/view/common-info.html?regNumber={ext}"
-            db.execute(
-                """INSERT INTO buyers(source,external_id,title,description,url,contact,budget_rub,city)
-                   VALUES(?,?,?,?,?,?,?,?)
-                   ON CONFLICT(source,external_id) DO UPDATE SET
-                   title=excluded.title,description=excluded.description,url=excluded.url,
-                   budget_rub=excluded.budget_rub,city=excluded.city""",
-                ("gosplan44", str(ext), title, blob[:1500], str(url), "", price, region)
-            )
-            count += 1
-        db.commit()
-        return {"status":"ok","loaded":count,"stats":stats,"source":API,"updated_at":datetime.utcnow().isoformat()+"Z"}
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code == 429:
-            items = _eis_fallback()
-            db2 = connect(os.getenv("DB_PATH", "deals.db"))
-            loaded = 0
+        for kw in KEYWORDS[:10]:
+            url="https://zakupki.gov.ru/epz/order/extendedsearch/results.html?searchString="+__import__("urllib.parse").parse.quote(kw)
             try:
-                for ext,kw,url in items:
-                    db2.execute("INSERT INTO buyers(source,external_id,title,description,url,contact,budget_rub,city) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(source,external_id) DO UPDATE SET title=excluded.title,url=excluded.url",("eis_web",ext,kw,url,"", "",0,""))
-                    loaded += 1
-                db2.commit()
-            finally:
-                db2.close()
-            return {"status":"ok","loaded":loaded,"source":"eis_web_fallback","api_error":"429"}
-        return {"status":"error","error":f"HTTP {e.response.status_code}: {e.response.text[:500]}","source":API}
+                r=httpx.get(url,headers=headers,timeout=25,follow_redirects=True)
+                if r.status_code!=200: continue
+                pages+=1
+                html=r.text
+                links=re.findall(r"""href=["']([^"']*common-info[^"']*)["']""",html,re.I)
+                raw+=len(links)
+                for link in links[:100]:
+                    if link.startswith("/"): link="https://zakupki.gov.ru"+link
+                    m=re.search(r"regNumber[=/]([0-9]{10,})",link)
+                    if not m: continue
+                    ext=m.group(1)
+                    pos=html.find(link)
+                    chunk=re.sub(r"<[^>]+>"," ",html[max(0,pos-2500):pos+2500])
+                    chunk=re.sub(r"\s+"," ",chunk).strip()
+                    low=chunk.lower()
+                    if REGIONS and not any(x in low for x in REGIONS): continue
+                    if not any(x in low for x in KEYWORDS): continue
+                    price=None
+                    for n in re.findall(r"(?<![0-9])([0-9]{7,12}(?:[.,][0-9]{1,2})?)(?![0-9])",chunk.replace(" ","")):
+                        v=_num(n)
+                        if v and MIN_RUB<=v<=MAX_RUB: price=v; break
+                    if not price: continue
+                    title=chunk[:500] or kw
+                    db.execute("""INSERT INTO buyers(source,external_id,title,description,url,contact,budget_rub,city)
+                    VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(source,external_id) DO UPDATE SET title=excluded.title,description=excluded.description,url=excluded.url,budget_rub=excluded.budget_rub,city=excluded.city""",
+                    ("eis_public",ext,title,chunk[:1500],link,"",price,""))
+                    loaded+=1
+            except Exception:
+                continue
+        db.commit()
+        return {"status":"ok","loaded":loaded,"raw":raw,"pages":pages,"source":"eis_public","updated_at":datetime.utcnow().isoformat()+"Z"}
     except Exception as e:
-        return {"status":"error","error":str(e),"source":API}
+        return {"status":"error","error":str(e),"source":"eis_public"}
     finally:
         db.close()
 
 def start_loop():
     def loop():
         while True:
-            refresh()
-            time.sleep(int(os.getenv("REFRESH_SECONDS", "900")))
-    threading.Thread(target=loop, daemon=True).start()
+            try: refresh()
+            except Exception: pass
+            time.sleep(int(os.getenv("REFRESH_SECONDS","3600")))
+    threading.Thread(target=loop,daemon=True).start()

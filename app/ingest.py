@@ -120,6 +120,20 @@ def _experience(blob):
         return "совместимо"
     return "требует проверки"
 
+def _security(item,blob,price):
+    for key,v in _walk_values(item):
+        k=key.lower().replace("_","")
+        if any(x in k for x in ("contractsecurity","performanceguarantee","obespechenieispolneniya","obespecheniekontrakta")):
+            n=_num(v)
+            if n is not None:
+                if 0<n<=100 and price:return price*n/100
+                return n
+    m=re.search(r"(?:обеспечени[ея]\s+(?:исполнения|контракта)|обеспечение контракта)[^%]{0,100}(\d{1,3}(?:[.,]\d+)?)\s*%",blob,re.I)
+    if m and price:
+        n=_num(m.group(1))
+        if n is not None:return price*n/100
+    return None
+
 def _fit(item):
     blob=_text(item).lower()
     reasons=[]

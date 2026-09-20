@@ -42,7 +42,7 @@ def api_review(limit:int=30):
 def economics(buyer_id:int):
     c=connect(DB); b=c.execute("SELECT * FROM buyers WHERE id=?",(buyer_id,)).fetchone(); c.close()
     if not b: return {"error":"not found"}
-    e=tender_economics(b["budget_rub"],b["advance_pct"])
+    e=tender_economics(b["budget_rub"],b["advance_pct"],security_rub=0,description=(b["title"] or "")+" "+(b["description"] or ""))
     return {"buyer":dict(b),"economics":e}
 
 @app.get("/api/buyers")

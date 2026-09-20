@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS matches(id INTEGER PRIMARY KEY AUTOINCREMENT,buyer_id
 
 def connect(path=None):
  if path is None:
-  path=os.getenv("DB_PATH") or ("/data/deals.db" if os.path.isdir("/data") else "deals.db"):
+  path=os.getenv("DB_PATH") or ("/data/deals.db" if os.path.isdir("/data") else "deals.db")
  c=sqlite3.connect(path); c.row_factory=sqlite3.Row; c.executescript(SCHEMA)
  cols={r[1] for r in c.execute("PRAGMA table_info(buyers)").fetchall()}
  migrations={

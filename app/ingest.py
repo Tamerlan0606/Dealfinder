@@ -68,8 +68,10 @@ def refresh():
         r = httpx.get(API, params={"limit": 100, "skip": 0, "sort": "published_date_desc"}, timeout=30, follow_redirects=True, headers={"User-Agent":"DealFinder/1.0"})
         r.raise_for_status()
         data = r.json()
+        items = _items(data)
         count = 0
-        for item in _items(data):
+        stats = {"raw": len(items), "price_ok": 0, "keyword_ok": 0, "region_ok": 0}
+        for item in items:
             blob = _text(item)
             title = _pick(item, ["title","name","subject","purchase_name","short_description","description"])
             title = str(title or "").strip()
@@ -79,11 +81,14 @@ def refresh():
             region = str(_pick(item, ["region","region_name","customer_region","location","subject"]) or "").strip()
             if not title or not ext or not price or price < MIN_RUB or price > MAX_RUB:
                 continue
+            stats["price_ok"] += 1
             low = (title + " " + blob).lower()
             if not any(k in low for k in KEYWORDS):
                 continue
+            stats["keyword_ok"] += 1
             if REGIONS and region and not any(rg in (region + " " + blob).lower() for rg in REGIONS):
                 continue
+            stats["region_ok"] += 1
             if not url:
                 url = f"https://zakupki.gov.ru/epz/order/notice/ea20/view/common-info.html?regNumber={ext}"
             db.execute(
@@ -96,7 +101,7 @@ def refresh():
             )
             count += 1
         db.commit()
-        return {"status":"ok","loaded":count,"updated_at":datetime.utcnow().isoformat()+"Z"}
+        return {"status":"ok","loaded":count,"stats":stats,"source":API,"updated_at":datetime.utcnow().isoformat()+"Z"}
     except httpx.HTTPStatusError as e:
         return {"status":"error","error":f"HTTP {e.response.status_code}: {e.response.text[:500]}","source":API}
     except Exception as e:

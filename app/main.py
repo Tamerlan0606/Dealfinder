@@ -47,9 +47,20 @@ def suppliers(limit:int=100):
     c=connect(DB); rows=c.execute("SELECT * FROM suppliers ORDER BY created_at DESC LIMIT ?",(limit,)).fetchall(); c.close()
     return [dict(r) for r in rows]
 
+@app.get("/api/health")
+def health():
+    try:
+        c=connect(DB)
+        buyers=c.execute("SELECT count(*) n FROM buyers").fetchone()["n"]
+        hot=c.execute("SELECT count(*) n FROM buyers WHERE fit_status='ЗАХОДИМ'").fetchone()["n"]
+        c.close()
+        return {"status":"ok","buyers":buyers,"hot":hot,"profile":"ТЕХСТРОЙ","experience_contracts":9,"experience_total_rub":101822407.84,"search_keywords":["клининг","уборка территорий","снег","очистка крыш"]}
+    except Exception as e:
+        return {"status":"error","error":str(e)}
+
 @app.get("/api/version")
 def version():
-    return {"version":"v5-TEKHSTROY","source":"GosPlan API v2","gosplan":"enabled","advance_min_pct":float(os.getenv("DEAL_MIN_ADVANCE_PCT","20")),"profile":"ТЕХСТРОЙ","manual_refresh":True}
+    return {"version":"v5-TEKHSTROY","source":"GosPlan API v2","gosplan":"enabled","advance_min_pct":float(os.getenv("DEAL_MIN_ADVANCE_PCT","20")),"profile":"ТЕХСТРОЙ","experience_contracts":9,"experience_total_rub":101822407.84,"manual_refresh":True}
 
 @app.get("/api/stats")
 def stats():

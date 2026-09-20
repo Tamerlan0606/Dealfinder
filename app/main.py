@@ -42,7 +42,8 @@ def hot(limit:int=50):
                            document_text=d.get("document_text") or "")
         d["economics"]=e
         d["economic_status"]="ЗАХОДИМ" if e and e["margin_rub"]>=min_margin and e["margin_pct"]>=min_margin_pct else "ПРОВЕРИТЬ ЭКОНОМИКУ"
-        result.append(d)
+        if d["economic_status"]=="ЗАХОДИМ":
+            result.append(d)
     return result
 
 @app.post("/api/review")

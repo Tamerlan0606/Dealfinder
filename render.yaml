@@ -15,6 +15,16 @@ services:
         value: "/tmp/deals.db"
       - key: REFRESH_SECONDS
         value: "3600"
+      - key: GOSPLAN_API_KEY
+        sync: false
+      - key: DEAL_MIN_RUB
+        value: "10000000"
+      - key: DEAL_MAX_RUB
+        value: "90000000"
+      - key: DEAL_REGIONS
+        value: "Ростовская область,Ставропольский край,Республика Ингушетия,Кабардино-Балкарская Республика,Республика Северная Осетия — Алания,Краснодарский край,Москва,Московская область"
+      - key: DEAL_KEYWORDS
+        value: "благоустройство,строитель,капитальн,ремонт,кровл,фасад,монтаж,дорог,озелен,площадк,тротуар,освещен,водопровод,канализац,теплоснабж,электромонтаж"
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: TELEGRAM_CHAT_ID

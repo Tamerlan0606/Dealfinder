@@ -4,190 +4,176 @@ import httpx
 from .db import connect
 
 REGIONS=[x.strip().lower() for x in os.getenv("DEAL_REGIONS","Ростовская область,Ставропольский край,Республика Ингушетия,Кабардино-Балкарская Республика,Республика Северная Осетия — Алания,Краснодарский край,Москва,Московская область").split(",") if x.strip()]
-KEYWORDS=[x.strip().lower() for x in os.getenv("DEAL_KEYWORDS","благоустройство,строитель,ремонт,кровл,фасад,монтаж,озелен,площадк,тротуар,освещен,водопровод,канализац,теплоснабж,электромонтаж").split(",") if x.strip()]
+KEYWORDS=[x.strip().lower() for x in os.getenv("DEAL_KEYWORDS","благоустройство,строитель,капитальн,ремонт,кровл,фасад,монтаж,озелен,площадк,тротуар,освещен,водопровод,канализац,теплоснабж,электромонтаж").split(",") if x.strip()]
 EXCLUDE_KEYWORDS=[x.strip().lower() for x in os.getenv("DEAL_EXCLUDE_KEYWORDS","автомобильных дорог,ремонт дорог,содержание дорог,медицинск газ,медицинских газ,газоснабж магистраль").split(",") if x.strip()]
-MIN_RUB=float(os.getenv("DEAL_MIN_RUB","10000000"))
-MAX_RUB=float(os.getenv("DEAL_MAX_RUB","90000000"))
-MIN_ADV=float(os.getenv("DEAL_MIN_ADVANCE_PCT","20"))
-MAX_BG=float(os.getenv("DEAL_BG_LIMIT_RUB","17000000"))
+MIN_RUB=float(os.getenv("DEAL_MIN_RUB","10000000")); MAX_RUB=float(os.getenv("DEAL_MAX_RUB","90000000"))
+MIN_ADV=float(os.getenv("DEAL_MIN_ADVANCE_PCT","20")); MAX_BG=float(os.getenv("DEAL_BG_LIMIT_RUB","17000000"))
 
 def _num(v):
     if isinstance(v,(int,float)): return float(v)
-    if v is None: return None
+    if v is None:return None
     try:
         s=str(v).replace("\xa0","").replace(" ","").replace(",",".")
         return float(re.sub(r"[^0-9.]","",s))
-    except Exception: return None
+    except:return None
 
 def _text(v):
     if v is None:return ""
-    if isinstance(v,(dict,list)): return " ".join(_text(x) for x in (v.values() if isinstance(v,dict) else v))
+    if isinstance(v,dict):return " ".join(_text(x) for x in v.values())
+    if isinstance(v,list):return " ".join(_text(x) for x in v)
     return str(v)
 
 def _walk_values(obj):
     if isinstance(obj,dict):
         for k,v in obj.items():
-            yield k,v
-            yield from _walk_values(v)
+            yield k,v; yield from _walk_values(v)
     elif isinstance(obj,list):
         for v in obj: yield from _walk_values(v)
 
-def _find_number(item, keys):
-    for key,v in _walk_values(item):
-        if key.lower() in keys:
+def _find_number(item,keys):
+    for k,v in _walk_values(item):
+        if k.lower().replace("_","") in {x.replace("_","") for x in keys}:
             n=_num(v)
             if n is not None:return n
     return None
 
 def _price(item):
-    n=_find_number(item,{"max_price","maxprice","initial_price","initialprice","price","nmck","nmck_amount","nmckamount"})
+    n=_find_number(item,{"max_price","maxPrice","initial_price","initialPrice","price","nmck","nmck_amount","nmckamount"})
     if n and MIN_RUB<=n<=MAX_RUB:return n
-    for key,v in _walk_values(item):
-        if any(x in key.lower() for x in ("price","cost","sum","amount","nmck")):
-            n=_num(v)
-            if n and MIN_RUB<=n<=MAX_RUB:return n
     return None
 
 def _advance(item,blob,price):
-    # First use structured fields.
-    for key,v in _walk_values(item):
-        k=key.lower().replace("_","")
-        if any(x in k for x in ("advance","prepayment","avans")):
+    for k,v in _walk_values(item):
+        kk=k.lower().replace("_","")
+        if any(x in kk for x in ("advance","prepayment","avans","predoplata","предоплат")):
             n=_num(v)
             if n is not None:
-                if 0<n<=1: return n*100
+                if 0<n<=1:return n*100
                 if 1<n<=100:return n
-                if price and 100<n<=price:return n/price*100
-    # Then parse explicit Russian text.
-    patterns=[
-        r"аванс[^%]{0,100}(\d{1,3}(?:[.,]\d+)?)\s*%",
-        r"авансов(?:ый|ого|ая|ое)?[^%]{0,100}(\d{1,3}(?:[.,]\d+)?)\s*%",
-        r"предоплат[^%]{0,100}(\d{1,3}(?:[.,]\d+)?)\s*%",
-        r"предварительн(?:ой|ая|ую)\s+оплат[^%]{0,100}(\d{1,3}(?:[.,]\d+)?)\s*%"
+                if price and n>100:return n/price*100
+    pats=[
+      r"аванс[^%]{0,120}(\d{1,3}(?:[.,]\d+)?)\s*%",
+      r"авансов(?:ый|ого|ая|ое)?[^%]{0,120}(\d{1,3}(?:[.,]\d+)?)\s*%",
+      r"предоплат[^%]{0,120}(\d{1,3}(?:[.,]\d+)?)\s*%",
+      r"предварительн(?:ой|ая|ую)\s+оплат[^%]{0,120}(\d{1,3}(?:[.,]\d+)?)\s*%"
     ]
-    for p in patterns:
+    for p in pats:
         m=re.search(p,blob,re.I)
-        if m:
-            n=_num(m.group(1))
-            if n is not None:return n
+        if m:return _num(m.group(1))
     return None
 
 def _deadline(item,blob):
-    keys={"submissiondeadline","deadline","enddate","end_date","applicationdeadline","application_end_date","date_end","dateend"}
-    for key,v in _walk_values(item):
-        if key.lower().replace("_","") in keys and isinstance(v,(str,int,float)):
+    for k,v in _walk_values(item):
+        kk=k.lower().replace("_","")
+        if kk in {"submissiondeadline","deadline","enddate","applicationdeadline","applicationenddate","dateend"}:
             s=str(v)
-            if re.search(r"\d{4}-\d{2}-\d{2}",s): return s[:10]
-            if re.search(r"\d{2}[.]\d{2}[.]\d{4}",s): return re.search(r"\d{2}[.]\d{2}[.]\d{4}",s).group(0)
+            m=re.search(r"(\d{4}-\d{2}-\d{2})",s)
+            if m:return m.group(1)
+            m=re.search(r"(\d{2}[.]\d{2}[.]\d{4})",s)
+            if m:return m.group(1)
     return None
 
 def _id(item):
-    for key,v in _walk_values(item):
-        if key.lower() in ("purchase_number","purchasenumber","reg_number","regnumber","reestr_number","reestrnumber","id"):
+    for k,v in _walk_values(item):
+        if k.lower().replace("_","") in {"purchasenumber","regnumber","reestrnumber","id"}:
             s=str(v)
             if re.fullmatch(r"\d{10,}",s):return s
     return None
 
 def _title(item):
-    for p in ("title","name","purchase_name","purchasename","object_info","objectinfo"):
-        for key,v in _walk_values(item):
-            if key.lower().replace("_","")==p.replace("_","").lower() and isinstance(v,(str,int,float)) and str(v).strip():
+    for wanted in ("title","name","purchase_name","purchaseName","object_info","objectInfo"):
+        for k,v in _walk_values(item):
+            if k.lower().replace("_","")==wanted.lower().replace("_","") and str(v).strip():
                 return str(v).strip()
     return "Закупка"
 
 def _url(item,ext):
-    for key,v in _walk_values(item):
-        if "url" in key.lower() and isinstance(v,str) and v.startswith("http"):return v
+    for k,v in _walk_values(item):
+        if "url" in k.lower() and isinstance(v,str) and v.startswith("http"):return v
     return f"https://zakupki.gov.ru/epz/order/notice/ok20/view/common-info.html?regNumber={ext}"
 
 def _type(item,blob):
-    for key,v in _walk_values(item):
-        k=key.lower()
-        if k in ("purchase_type","purchasetype","law","fz","procurement_type","procurementtype"):
-            return str(v)
+    for k,v in _walk_values(item):
+        if k.lower().replace("_","") in {"purchasetype","law","fz","procurementtype"}:return str(v)
     if "223-фз" in blob or "223 фз" in blob:return "223-ФЗ"
     return "44-ФЗ"
 
 def _sro(blob):
     if "сро" not in blob:return "не указано"
-    if any(x in blob for x in ("членство в сро","требуется сро","требовани.*сро","членом сро")):return "требуется"
+    if re.search(r"член(?:ство|ом)|требуется\s+сро|требован\S*\s+сро",blob):return "требуется"
     return "упоминается"
 
 def _experience(blob):
-    if not any(x in blob for x in ("опыт","аналогичн","исполненн.*контракт","контрактов")):return "не указано"
-    # TEKHSTROY profile: landscaping/general construction/repair/building systems.
-    if any(x in blob for x in ("благоустрой","озелен","площадк","тротуар","ремонт здан","ремонт помещ","строительств здан","общестро","фасад","кровл","монтаж","спортивн","стадион")):
-        return "совместимо"
-    return "требует проверки"
+    if not re.search(r"опыт|аналогич|исполненн.*контракт|контрактов|квалификац",blob):return "не указано"
+    profile=("благоустрой","озелен","площадк","тротуар","ремонт здан","ремонт помещ","строительств здан","общестро","фасад","кровл","монтаж","спортивн","стадион")
+    return "совместимо" if any(x in blob for x in profile) else "требует проверки"
 
 def _security(item,blob,price):
-    for key,v in _walk_values(item):
-        k=key.lower().replace("_","")
-        if any(x in k for x in ("contractsecurity","performanceguarantee","obespechenieispolneniya","obespecheniekontrakta")):
+    for k,v in _walk_values(item):
+        kk=k.lower().replace("_","")
+        if any(x in kk for x in ("contractsecurity","performanceguarantee","obespechenieispolneniya","obespecheniekontrakta")):
             n=_num(v)
             if n is not None:
                 if 0<n<=100 and price:return price*n/100
                 return n
-    m=re.search(r"(?:обеспечени[ея]\s+(?:исполнения|контракта)|обеспечение контракта)[^%]{0,100}(\d{1,3}(?:[.,]\d+)?)\s*%",blob,re.I)
-    if m and price:
-        n=_num(m.group(1))
-        if n is not None:return price*n/100
-    return None
+    m=re.search(r"обеспечени[ея]\s+(?:исполнения|контракта)[^%]{0,100}(\d{1,3}(?:[.,]\d+)?)\s*%",blob,re.I)
+    return price*_num(m.group(1))/100 if m and price else None
 
 def _fit(item):
     blob=_text(item).lower()
-    reasons=[]
-    if REGIONS and not any(x in blob for x in REGIONS):return False,"регион не подходит"
-    if any(x in blob for x in EXCLUDE_KEYWORDS):return False,"предмет вне профиля ТЕХСТРОЙ"
-    if not any(x in blob for x in KEYWORDS):return False,"предмет вне профиля"
+    if REGIONS and not any(x in blob for x in REGIONS):return False,"регион"
+    if any(x in blob for x in EXCLUDE_KEYWORDS):return False,"вне профиля"
+    if not any(x in blob for x in KEYWORDS):return False,"вне профиля"
     price=_price(item)
-    if not price:return False,"нет НМЦК"
+    if not price:return False,"НМЦК"
     adv=_advance(item,blob,price)
-    if adv is None or adv<MIN_ADV:return False,f"аванс ниже {MIN_ADV:.0f}% или не подтвержден"
+    if adv is None or adv<MIN_ADV:return False,f"аванс < {MIN_ADV:.0f}%/не подтвержден"
+    sec=_security(item,blob,price)
+    if sec is not None and sec>MAX_BG:return False,"обеспечение выше лимита БГ"
     exp=_experience(blob)
-    if exp=="требует проверки":return False,"опыт требует проверки"
-    if exp=="совместимо":reasons.append("опыт")
-    sro=_sro(blob)
-    reasons.append("аванс")
-    reasons.append("профиль")
-    reasons.append("НМЦК")
-    return True,"; ".join(reasons)
+    if exp=="требует проверки":return False,"опыт не подтвержден профилем"
+    deadline=_deadline(item,blob)
+    if deadline:
+        try:
+            d=datetime.strptime(deadline,"%Y-%m-%d").replace(tzinfo=timezone.utc)
+            if d<datetime.now(timezone.utc):return False,"срок подачи истек"
+        except:pass
+    return True,"аванс; профиль; НМЦК; БГ"
 
 def refresh():
-    db=connect(os.getenv("DB_PATH","deals.db"))
-    api_key=os.getenv("GOSPLAN_API_KEY","").strip()
+    db=connect(os.getenv("DB_PATH","deals.db")); api_key=os.getenv("GOSPLAN_API_KEY","").strip()
     base="https://v2.gosplan.info" if api_key else "https://v2test.gosplan.info"
-    headers={"User-Agent":"DealFinder/4.0","Accept":"application/json"}
+    headers={"User-Agent":"DealFinder/5.0","Accept":"application/json"}
     if api_key:headers["X-API-Key"]=api_key
+    loaded=raw=pages=0;seen=set()
     try:
-        loaded=raw=pages=0;seen=set()
-        for page in range(10):
-            r=httpx.get(base+"/fz44/purchases",params={"limit":100,"skip":page*100},headers=headers,timeout=40,follow_redirects=True)
-            r.raise_for_status();data=r.json()
-            items=data if isinstance(data,list) else (data.get("items") or data.get("data") or data.get("results") or [])
-            if not items:break
-            pages+=1;raw+=len(items)
-            for item in items:
-                if not isinstance(item,dict):continue
-                ext=_id(item)
-                if not ext or ext in seen:continue
-                seen.add(ext)
-                ok,reason=_fit(item)
-                if not ok:continue
-                blob=_text(item).lower();price=_price(item);adv=_advance(item,blob,price)
-                deadline=_deadline(item,blob)
-                adv_rub=price*adv/100 if adv is not None else None
-                title=_title(item);url=_url(item,ext)
-                db.execute("""INSERT INTO buyers(source,external_id,title,description,url,contact,budget_rub,city,advance_pct,advance_rub,deadline,procurement_type,sro_required,experience_required,fit_status,fit_reasons)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                ON CONFLICT(source,external_id) DO UPDATE SET title=excluded.title,description=excluded.description,url=excluded.url,budget_rub=excluded.budget_rub,advance_pct=excluded.advance_pct,advance_rub=excluded.advance_rub,deadline=excluded.deadline,procurement_type=excluded.procurement_type,sro_required=excluded.sro_required,experience_required=excluded.experience_required,fit_status=excluded.fit_status,fit_reasons=excluded.fit_reasons""",
-                ("gosplan_v2",ext,title,blob[:6000],url,"",price,"",adv,adv_rub,deadline,_type(item,blob),_sro(blob),_experience(blob),"ЗАХОДИМ",reason))
-                loaded+=1
-            if len(items)<100:break
+        with httpx.Client(timeout=40,follow_redirects=True,headers=headers) as client:
+            for page in range(20):
+                params={"limit":100,"skip":page*100,"sort":"published_desc"}
+                r=client.get(base+"/fz44/purchases",params=params); r.raise_for_status()
+                data=r.json()
+                items=data if isinstance(data,list) else (data.get("items") or data.get("data") or data.get("results") or [])
+                if not items:break
+                pages+=1;raw+=len(items)
+                for item in items:
+                    if not isinstance(item,dict):continue
+                    ext=_id(item)
+                    if not ext or ext in seen:continue
+                    seen.add(ext)
+                    ok,reason=_fit(item)
+                    if not ok:continue
+                    blob=_text(item).lower();price=_price(item);adv=_advance(item,blob,price)
+                    deadline=_deadline(item,blob)
+                    db.execute("""INSERT INTO buyers(source,external_id,title,description,url,contact,budget_rub,city,advance_pct,advance_rub,deadline,procurement_type,sro_required,experience_required,fit_status,fit_reasons)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(source,external_id) DO UPDATE SET title=excluded.title,description=excluded.description,url=excluded.url,budget_rub=excluded.budget_rub,advance_pct=excluded.advance_pct,advance_rub=excluded.advance_rub,deadline=excluded.deadline,procurement_type=excluded.procurement_type,sro_required=excluded.sro_required,experience_required=excluded.experience_required,fit_status=excluded.fit_status,fit_reasons=excluded.fit_reasons""",
+                    ("gosplan_v2",ext,_title(item),blob[:6000],_url(item,ext),"",price,"",adv,price*adv/100,deadline,_type(item,blob),_sro(blob),_experience(blob),"ЗАХОДИМ",reason)); loaded+=1
+                if len(items)<100:break
         db.commit()
-        return {"status":"ok","loaded":loaded,"raw":raw,"pages":pages,"source":"gosplan_v2","server":base,"advance_min_pct":MIN_ADV,"bg_limit_rub":MAX_BG,"pricing":"5% bid discount + 7% tax","updated_at":datetime.now(timezone.utc).isoformat()}
+        return {"status":"ok","loaded":loaded,"raw":raw,"pages":pages,"source":"gosplan_v2","server":base,"advance_min_pct":MIN_ADV,"bg_limit_rub":MAX_BG,"pricing":"5% ниже НМЦК; налог 7%","updated_at":datetime.now(timezone.utc).isoformat()}
     except Exception as e:
-        return {"status":"error","error":str(e),"source":"gosplan_v2","server":base}
+        db.rollback()
+        return {"status":"error","loaded":loaded,"raw":raw,"pages":pages,"error":str(e),"source":"gosplan_v2","server":base}
     finally:db.close()
 
 def start_loop():return None

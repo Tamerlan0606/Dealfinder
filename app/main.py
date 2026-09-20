@@ -128,7 +128,7 @@ def version():
 def stats():
     c=connect(DB)
     buyers=c.execute("SELECT count(*) n FROM buyers").fetchone()["n"]
-    suppliers=c.execute("SELECT count(*) n FROM suppliers").fetchone()["n"]
+    suppliers=c.execute("SELECT count(DISTINCT source) n FROM buyers WHERE source IS NOT NULL AND source <> ''").fetchone()["n"]
     min_r=float(os.getenv("DEAL_MIN_RUB","10000000")); max_r=float(os.getenv("DEAL_MAX_RUB","90000000"))
     hot=c.execute("SELECT count(*) n FROM buyers WHERE budget_rub BETWEEN ? AND ? AND fit_status='ЗАХОДИМ' AND advance_pct >= ?",(min_r,max_r,float(os.getenv("DEAL_MIN_ADVANCE_PCT","20")))).fetchone()["n"]
     c.close()
@@ -151,6 +151,7 @@ def diagnostics():
         "status":"ok",
         "db_path":DB,
         "buyers":total,
+        "sources":c.execute("SELECT count(DISTINCT source) n FROM buyers WHERE source IS NOT NULL AND source <> ''").fetchone()["n"],
         "hot":hot,
         "by_fit_status":by_status,
         "api_key_configured":bool(os.getenv("GOSPLAN_API_KEY","").strip()),

@@ -157,15 +157,24 @@ def _security(item,blob,price):
     m=re.search(r"обеспечени[ея]\s+(?:исполнения|контракта)[^%]{0,100}(\d{1,3}(?:[.,]\d+)?)\s*%",blob,re.I)
     return price*_num(m.group(1))/100 if m and price else None
 
+def _region_allowed(item, blob):
+    # Do not reject a tender merely because the API omitted the region field.
+    # If a structured delivery region exists, require an allowed region.
+    region_parts=[]
+    for k,v in _walk_values(item):
+        nk=_norm_key(k)
+        if any(x in nk for x in ("region","deliveryplace","deliveryaddress","location","place")):
+            region_parts.append(_text(v).lower())
+    structured=" ".join(region_parts)
+    if structured:
+        return any(x in structured for x in REGIONS)
+    # For unstructured records, accept when an allowed region is explicit.
+    # Unknown geography goes to document review instead of being silently discarded.
+    return True
+
 def _fit(item):
     blob=_text(item).lower()
-    places=item.get("delivery_places") or item.get("delivery_places_kladr") or []
-    has_geo=bool(places) or any(x in blob for x in (
-        "область","край","республика","москва","петербург","московск","ростов","ставропол",
-        "краснодар","ингушет","осети","кабардин","район","г.","город"
-    ))
-    # Регион отбрасываем только если география явно есть и она чужая
-    if REGIONS and has_geo and not any(x in blob for x in REGIONS):
+    if not _region_allowed(item,blob):
         return False,"регион"
     if any(x in blob for x in EXCLUDE_KEYWORDS):
         return False,"вне профиля"

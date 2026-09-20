@@ -39,6 +39,8 @@ services:
         value: "1.5"
       - key: GOSPLAN_API_KEY
         sync: false
+      - key: USE_GOSPLAN_TEST
+        value: "true"
       - key: DEAL_MIN_RUB
         value: "10000000"
       - key: DEAL_MAX_RUB

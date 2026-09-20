@@ -153,7 +153,7 @@ def refresh():
             for page in range(max_pages):
                 if page and not api_key:
                     time.sleep(test_interval)
-                params={"limit":10,"skip":page*10,"sort":"max_price_desc"}
+                params={"limit":10,"skip":page*10}
                 for attempt in range(3):
                     r=client.get(base+"/fz44/purchases",params=params)
                     if r.status_code != 429:

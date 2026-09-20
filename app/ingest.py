@@ -213,10 +213,10 @@ def refresh():
                         blob=_text(item).lower();price=_price(item);adv=_advance(item,blob,price);status="ЗАХОДИМ" if adv is not None and adv>=MIN_ADV else "ПРОВЕРИТЬ АВАНС"
                         if status=="ЗАХОДИМ":diag["accepted"]+=1
                         deadline=_deadline(item,blob)
-                        db.execute("""INSERT INTO buyers(source,external_id,title,description,url,contact,budget_rub,city,advance_pct,advance_rub,deadline,procurement_type,sro_required,experience_required,fit_status,fit_reasons)
-VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-ON CONFLICT(source,external_id) DO UPDATE SET title=excluded.title,description=excluded.description,url=excluded.url,budget_rub=excluded.budget_rub,advance_pct=excluded.advance_pct,advance_rub=excluded.advance_rub,deadline=excluded.deadline,procurement_type=excluded.procurement_type,sro_required=excluded.sro_required,experience_required=excluded.experience_required,fit_status=excluded.fit_status,fit_reasons=excluded.fit_reasons""",
-                            ("gosplan_v2"+endpoint,ext,_title(item),blob[:6000],_url(item,ext),"",price,"",adv,(price*adv/100 if adv is not None else None),deadline,_type(item,blob),_sro(blob),_experience(blob),status,reason));loaded+=1
+                        db.execute("""INSERT INTO buyers(source,external_id,title,description,url,contact,budget_rub,city,advance_pct,advance_rub,deadline,procurement_type,sro_required,experience_required,security_rub,fit_status,fit_reasons)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+ON CONFLICT(source,external_id) DO UPDATE SET title=excluded.title,description=excluded.description,url=excluded.url,budget_rub=excluded.budget_rub,advance_pct=excluded.advance_pct,advance_rub=excluded.advance_rub,deadline=excluded.deadline,procurement_type=excluded.procurement_type,sro_required=excluded.sro_required,experience_required=excluded.experience_required,security_rub=excluded.security_rub,fit_status=excluded.fit_status,fit_reasons=excluded.fit_reasons""",
+                            ("gosplan_v2"+endpoint,ext,_title(item),blob[:6000],_url(item,ext),"",price,"",adv,(price*adv/100 if adv is not None else None),deadline,_type(item,blob),_sro(blob),_experience(blob),sec,status,reason));loaded+=1
                     if len(items)<10:break
         db.commit()
         return {"status":"ok","loaded":loaded,"raw":raw,"pages":pages,"source":"gosplan_v2","server":base,"advance_min_pct":MIN_ADV,"bg_limit_rub":MAX_BG,"pricing":"5% ниже НМЦК; налог 7%","api_mode":"production" if api_key else "test","diagnostics":diag,"updated_at":datetime.now(timezone.utc).isoformat()}

@@ -9,6 +9,7 @@ EXCLUDE_KEYWORDS=[x.strip().lower() for x in os.getenv("DEAL_EXCLUDE_KEYWORDS","
 MIN_RUB=float(os.getenv("DEAL_MIN_RUB","10000000"))
 MAX_RUB=float(os.getenv("DEAL_MAX_RUB","90000000"))
 MIN_ADV=float(os.getenv("DEAL_MIN_ADVANCE_PCT","20"))
+MAX_BG=float(os.getenv("DEAL_BG_LIMIT_RUB","17000000"))
 
 def _num(v):
     if isinstance(v,(int,float)): return float(v)
@@ -170,7 +171,7 @@ def refresh():
                 loaded+=1
             if len(items)<100:break
         db.commit()
-        return {"status":"ok","loaded":loaded,"raw":raw,"pages":pages,"source":"gosplan_v2","server":base,"advance_min_pct":MIN_ADV,"updated_at":datetime.now(timezone.utc).isoformat()}
+        return {"status":"ok","loaded":loaded,"raw":raw,"pages":pages,"source":"gosplan_v2","server":base,"advance_min_pct":MIN_ADV,"bg_limit_rub":MAX_BG,"pricing":"5% bid discount + 7% tax","updated_at":datetime.now(timezone.utc).isoformat()}
     except Exception as e:
         return {"status":"error","error":str(e),"source":"gosplan_v2","server":base}
     finally:db.close()

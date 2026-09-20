@@ -136,16 +136,45 @@ def stats():
     c.close()
     return {"buyers":buyers,"suppliers":suppliers,"hot":hot}
 
+def _start_manual_refresh():
+    if not _refresh_lock.acquire(blocking=False):
+        return False
+    def worker():
+        global _last_bg_error, _last_bg_result
+        try:
+            result=refresh()
+            _last_bg_result=result
+            if result.get("status") in ("ok","fallback"):
+                _last_bg_error=None
+                if os.getenv("AUTO_REVIEW","true").lower()=="true":
+                    try:
+                        result=dict(result)
+                        result["review"]=review_unknown(DB,int(os.getenv("AUTO_REVIEW_LIMIT","20")))
+                        _last_bg_result=result
+                    except Exception as e:
+                        _last_bg_result=dict(result)
+                        _last_bg_result["review_error"]=f"{type(e).__name__}: {e}"
+            else:
+                _last_bg_error=result.get("error") or "refresh returned non-ok"
+        except Exception as e:
+            _last_bg_error=f"{type(e).__name__}: {e}"
+            _last_bg_result={"status":"error","error":_last_bg_error}
+        finally:
+            _refresh_lock.release()
+    threading.Thread(target=worker,daemon=True).start()
+    return True
+
 @app.post("/api/refresh")
 def api_refresh():
-    return _run_refresh_once()
+    if not _start_manual_refresh():
+        return JSONResponse({"status":"busy","error":"Обновление уже выполняется","last_result":_last_bg_result},status_code=200)
+    return {"status":"started","message":"Обновление запущено","last_result":_last_bg_result}
 
 @app.get("/api/refresh")
 def api_refresh_get():
-    if not _refresh_lock.acquire(blocking=False):
-        return JSONResponse({"status":"busy","error":"Обновление уже выполняется","last_result":_last_bg_result}, status_code=200)
-    _refresh_lock.release()
-    return _run_refresh_once()
+    if not _start_manual_refresh():
+        return JSONResponse({"status":"busy","error":"Обновление уже выполняется","last_result":_last_bg_result},status_code=200)
+    return {"status":"started","message":"Обновление запущено","last_result":_last_bg_result}
 
 @app.get("/api/test-gosplan")
 def test_gosplan():

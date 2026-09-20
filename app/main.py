@@ -146,12 +146,13 @@ def diagnostics():
     by_status={}
     for row in c.execute("SELECT fit_status, count(*) n FROM buyers GROUP BY fit_status").fetchall():
         by_status[row["fit_status"] or "null"] = row["n"]
+    sources=c.execute("SELECT count(DISTINCT source) n FROM buyers WHERE source IS NOT NULL AND source <> ''").fetchone()["n"]
     c.close()
     return {
         "status":"ok",
         "db_path":DB,
         "buyers":total,
-        "sources":c.execute("SELECT count(DISTINCT source) n FROM buyers WHERE source IS NOT NULL AND source <> ''").fetchone()["n"],
+        "sources":sources,
         "hot":hot,
         "by_fit_status":by_status,
         "api_key_configured":bool(os.getenv("GOSPLAN_API_KEY","").strip()),

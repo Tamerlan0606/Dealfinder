@@ -1,3 +1,4 @@
+import os
 import sqlite3
 
 SCHEMA='''
@@ -13,7 +14,9 @@ CREATE TABLE IF NOT EXISTS suppliers(id INTEGER PRIMARY KEY AUTOINCREMENT,name T
 CREATE TABLE IF NOT EXISTS matches(id INTEGER PRIMARY KEY AUTOINCREMENT,buyer_id INTEGER,supplier_id INTEGER,buy_rub REAL,sell_rub REAL,margin_rub REAL,margin_pct REAL,status TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP,UNIQUE(buyer_id,supplier_id));
 '''
 
-def connect(path='deals.db'):
+def connect(path=None):
+ if path is None:
+  path=os.getenv("DB_PATH") or ("/data/deals.db" if os.path.isdir("/data") else "deals.db"):
  c=sqlite3.connect(path); c.row_factory=sqlite3.Row; c.executescript(SCHEMA)
  cols={r[1] for r in c.execute("PRAGMA table_info(buyers)").fetchall()}
  migrations={

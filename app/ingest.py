@@ -1,0 +1,110 @@
+import os, re, time, threading
+from datetime import datetime
+import httpx
+from .db import connect
+
+API = os.getenv("GOSPLAN_API_URL", "https://v2test.gosplan.info/fz44/purchases")
+REGIONS = [x.strip().lower() for x in os.getenv(
+    "DEAL_REGIONS",
+    "Ростовская область,Ставропольский край,Республика Ингушетия,Кабардино-Балкарская Республика,Республика Северная Осетия — Алания,Краснодарский край,Москва,Московская область"
+).split(",") if x.strip()]
+KEYWORDS = [x.strip().lower() for x in os.getenv(
+    "DEAL_KEYWORDS",
+    "благоустройство,строитель,капитальн,ремонт,кровл,фасад,монтаж,дорог,озелен,площадк,тротуар,освещен,водопровод,канализац,теплоснабж,электромонтаж"
+).split(",") if x.strip()]
+MIN_RUB = float(os.getenv("DEAL_MIN_RUB", "10000000"))
+MAX_RUB = float(os.getenv("DEAL_MAX_RUB", "90000000"))
+
+def _pick(obj, keys):
+    wanted = {k.lower() for k in keys}
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if k.lower() in wanted and v not in (None, ""):
+                return v
+        for v in obj.values():
+            r = _pick(v, keys)
+            if r not in (None, ""):
+                return r
+    elif isinstance(obj, list):
+        for v in obj:
+            r = _pick(v, keys)
+            if r not in (None, ""):
+                return r
+    return None
+
+def _text(obj):
+    if isinstance(obj, str):
+        return obj
+    if isinstance(obj, dict):
+        return " ".join(_text(v) for v in obj.values())
+    if isinstance(obj, list):
+        return " ".join(_text(v) for v in obj)
+    return str(obj or "")
+
+def _num(v):
+    if isinstance(v, (int, float)):
+        return float(v)
+    if not v:
+        return None
+    s = re.sub(r"[^0-9,.-]", "", str(v).replace("\xa0", ""))
+    s = s.replace(",", ".")
+    try:
+        return float(s)
+    except Exception:
+        return None
+
+def _items(data):
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        for k in ("items", "results", "purchases", "data"):
+            if isinstance(data.get(k), list):
+                return data[k]
+    return []
+
+def refresh():
+    db = connect(os.getenv("DB_PATH", "deals.db"))
+    try:
+        r = httpx.get(API, params={"limit": 100, "skip": 0}, timeout=30, follow_redirects=True)
+        r.raise_for_status()
+        data = r.json()
+        count = 0
+        for item in _items(data):
+            blob = _text(item)
+            title = _pick(item, ["title","name","subject","purchase_name","short_description","description"])
+            title = str(title or "").strip()
+            price = _num(_pick(item, ["max_price","initial_max_price","nmck","nmc","price","maximum_price"]))
+            ext = _pick(item, ["purchase_number","registry_number","number","id"])
+            url = _pick(item, ["url","href","notice_url","purchase_url"])
+            region = str(_pick(item, ["region","region_name","customer_region","location","subject"]) or "").strip()
+            if not title or not ext or not price or price < MIN_RUB or price > MAX_RUB:
+                continue
+            low = (title + " " + blob).lower()
+            if not any(k in low for k in KEYWORDS):
+                continue
+            if REGIONS and not any(rg in (region + " " + blob).lower() for rg in REGIONS):
+                continue
+            if not url:
+                url = f"https://zakupki.gov.ru/epz/order/notice/ea20/view/common-info.html?regNumber={ext}"
+            db.execute(
+                """INSERT INTO buyers(source,external_id,title,description,url,contact,budget_rub,city)
+                   VALUES(?,?,?,?,?,?,?,?)
+                   ON CONFLICT(source,external_id) DO UPDATE SET
+                   title=excluded.title,description=excluded.description,url=excluded.url,
+                   budget_rub=excluded.budget_rub,city=excluded.city""",
+                ("gosplan44", str(ext), title, blob[:1500], str(url), "", price, region)
+            )
+            count += 1
+        db.commit()
+        return {"status":"ok","loaded":count,"updated_at":datetime.utcnow().isoformat()+"Z"}
+    except Exception as e:
+        return {"status":"error","error":str(e)}
+    finally:
+        db.close()
+
+def start_loop():
+    def loop():
+        while True:
+            refresh()
+            time.sleep(int(os.getenv("REFRESH_SECONDS", "900")))
+    threading.Thread(target=loop, daemon=True).start()

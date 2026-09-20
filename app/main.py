@@ -7,7 +7,7 @@ from .db import connect
 from .scoring import calc
 from .telegram import notify
 from .outreach import send
-from .ingest import refresh, start_loop
+from .ingest import refresh
 
 load_dotenv()
 DB=os.getenv("DB_PATH","deals.db")

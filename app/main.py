@@ -93,7 +93,10 @@ def stats():
 
 @app.post("/api/refresh")
 def api_refresh():
-    return refresh()
+    result=refresh()
+    if result.get("status")=="ok" and os.getenv("AUTO_REVIEW","true").lower()=="true":
+        result["review"]=review_unknown(DB,int(os.getenv("AUTO_REVIEW_LIMIT","20")))
+    return result
 
 @app.get("/api/diagnostics")
 def diagnostics():

@@ -11,7 +11,7 @@ from .ingest import refresh
 from .review import review_unknown
 
 load_dotenv()
-DB=os.getenv("DB_PATH","deals.db")
+DB=os.getenv("DB_PATH") or ("/data/deals.db" if os.path.isdir("/data") else "deals.db")
 app=FastAPI(title="DealFinder Mobile v5-TEKHSTROY")
 
 class Buyer(BaseModel):

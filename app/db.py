@@ -24,7 +24,9 @@ def connect(path='deals.db'):
   "sro_required":"ALTER TABLE buyers ADD COLUMN sro_required TEXT",
   "experience_required":"ALTER TABLE buyers ADD COLUMN experience_required TEXT",
   "fit_status":"ALTER TABLE buyers ADD COLUMN fit_status TEXT DEFAULT 'ЗАХОДИМ'",
-  "fit_reasons":"ALTER TABLE buyers ADD COLUMN fit_reasons TEXT"
+  "fit_reasons":"ALTER TABLE buyers ADD COLUMN fit_reasons TEXT",
+  "review_status":"ALTER TABLE buyers ADD COLUMN review_status TEXT DEFAULT 'new'",
+  "reviewed_at":"ALTER TABLE buyers ADD COLUMN reviewed_at TEXT"
  }
  for col,sql in migrations.items():
   if col not in cols: c.execute(sql)

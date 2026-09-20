@@ -4,7 +4,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from .db import connect
-from .scoring import calc
+from .scoring import calc, tender_economics
 from .telegram import notify
 from .outreach import send
 from .ingest import refresh
@@ -37,6 +37,13 @@ def hot(limit:int=50):
 @app.post("/api/review")
 def api_review(limit:int=30):
     return review_unknown(DB,limit)
+
+@app.get("/api/economics/{buyer_id}")
+def economics(buyer_id:int):
+    c=connect(DB); b=c.execute("SELECT * FROM buyers WHERE id=?",(buyer_id,)).fetchone(); c.close()
+    if not b: return {"error":"not found"}
+    e=tender_economics(b["budget_rub"],b["advance_pct"])
+    return {"buyer":dict(b),"economics":e}
 
 @app.get("/api/buyers")
 def buyers(limit:int=100):

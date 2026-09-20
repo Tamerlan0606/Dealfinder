@@ -40,7 +40,9 @@ services:
       - key: GOSPLAN_API_KEY
         sync: false
       - key: GOSPLAN_TEST_INTERVAL
-        value: "2"
+        value: "10"
+      - key: GOSPLAN_RATE_LIMIT_COOLDOWN
+        value: "300"
       - key: USE_GOSPLAN_TEST
         value: "true"
       - key: DEAL_MIN_RUB

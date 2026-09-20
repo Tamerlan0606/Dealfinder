@@ -1,4 +1,4 @@
-import os, re, json
+import os, re, json, time
 from datetime import datetime, timezone
 import httpx
 from .db import connect
@@ -146,11 +146,27 @@ def refresh():
     headers={"User-Agent":"DealFinder/5.0","Accept":"application/json"}
     if api_key:headers["X-API-Key"]=api_key
     loaded=raw=pages=0;seen=set()
+    max_pages=int(os.getenv("GOSPLAN_MAX_PAGES","8"))
+    test_interval=float(os.getenv("GOSPLAN_TEST_INTERVAL","7.0"))
     try:
         with httpx.Client(timeout=40,follow_redirects=True,headers=headers) as client:
-            for page in range(20):
+            for page in range(max_pages):
+                if page and not api_key:
+                    time.sleep(test_interval)
                 params={"limit":100,"skip":page*100,"sort":"published_desc"}
-                r=client.get(base+"/fz44/purchases",params=params); r.raise_for_status()
+                for attempt in range(3):
+                    r=client.get(base+"/fz44/purchases",params=params)
+                    if r.status_code != 429:
+                        r.raise_for_status()
+                        break
+                    retry_after=r.headers.get("Retry-After")
+                    try:
+                        wait=max(7.0,float(retry_after)) if retry_after else 7.0
+                    except:
+                        wait=7.0
+                    if attempt==2:
+                        raise RuntimeError(f"GosPlan 429: лимит тестового API. Повторите обновление позже (ожидание {wait:.0f} сек).")
+                    time.sleep(wait)
                 data=r.json()
                 items=data if isinstance(data,list) else (data.get("items") or data.get("data") or data.get("results") or [])
                 if not items:break

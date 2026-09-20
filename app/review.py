@@ -30,10 +30,10 @@ def _deadline(text):
 
 def review_unknown(db_path, limit=30):
     c=connect(db_path)
-    rows=c.execute("SELECT * FROM buyers WHERE fit_status='ПРОВЕРИТЬ АВАНС' OR document_text IS NULL ORDER BY created_at DESC LIMIT ?",(limit,)).fetchall()
+    rows=c.execute("SELECT * FROM buyers WHERE fit_status='ПРОВЕРИТЬ АВАНС' AND (review_status IS NULL OR review_status!='done') ORDER BY created_at DESC LIMIT ?",(limit,)).fetchall()
     results=[]
     minimum=float(os.getenv("DEAL_MIN_ADVANCE_PCT","20"))
-    with httpx.Client(timeout=35,follow_redirects=True,headers={"User-Agent":"DealFinder/6.0"}) as client:
+    with httpx.Client(timeout=12,follow_redirects=True,headers={"User-Agent":"DealFinder/6.0"}) as client:
         for row in rows:
             d=dict(row); card_text=""
             try:

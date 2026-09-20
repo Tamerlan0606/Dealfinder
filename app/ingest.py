@@ -2,7 +2,7 @@ import os, re, time
 from datetime import datetime, timezone
 import httpx
 from urllib.parse import quote
-import feedparser
+import xml.etree.ElementTree as ET
 from .db import connect
 
 REGIONS=[x.strip().lower() for x in os.getenv("DEAL_REGIONS","Ростовская область,Ставропольский край,Республика Ингушетия,Кабардино-Балкарская Республика,Республика Северная Осетия — Алания,Краснодарский край,Москва,Московская область").split(",") if x.strip()]
@@ -246,9 +246,10 @@ def _rss_fallback(db):
             for kw in keywords:
                 r=client.get(base+'?searchString='+quote(kw)+'&morphology=on&pageNumber=1')
                 if r.status_code>=400: continue
-                feed=feedparser.parse(r.text)
-                for entry in feed.entries[:100]:
-                    raw+=1; title=str(getattr(entry,'title','') or '').strip(); desc=str(getattr(entry,'description','') or '').strip(); link_url=str(getattr(entry,'link','') or '').strip()
+                root=ET.fromstring(r.text)
+                entries=root.findall('.//item')
+                for entry in entries[:100]:
+                    raw+=1; title=(entry.findtext('title') or '').strip(); desc=(entry.findtext('description') or '').strip(); link_url=(entry.findtext('link') or '').strip()
                     blob=(title+' '+desc).lower(); m=re.search(r'(\d{19,25})',blob); ext=m.group(1) if m else link_url
                     if not ext or ext in seen: continue
                     seen.add(ext); price=_price_from_rss(blob)

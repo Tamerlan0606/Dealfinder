@@ -21,7 +21,7 @@ services:
       - key: GOSPLAN_ENDPOINTS
         value: "/fz44/purchases,/fz223/purchases"
       - key: GOSPLAN_MAX_PAGES
-        value: "1"
+        value: "4"
       - key: REFRESH_SECONDS
         value: "3600"
       - key: AUTO_REFRESH
@@ -41,7 +41,7 @@ services:
       - key: GOSPLAN_API_KEY
         sync: false
       - key: GOSPLAN_TEST_INTERVAL
-        value: "10"
+        value: "8"
       - key: GOSPLAN_RATE_LIMIT_COOLDOWN
         value: "300"
       - key: USE_GOSPLAN_TEST

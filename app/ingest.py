@@ -318,6 +318,24 @@ def _price_from_rss(blob):
         if n and MIN_RUB<=n<=MAX_RUB: nums.append(n)
     return max(nums) if nums else None
 
+REGION_MARKERS={
+    "Ростовская область":("ростовская область","ростов-на-дону","ростов на дону"),
+    "Ставропольский край":("ставропольский край","ставрополь","пятигорск","есcентуки","ессентуки"),
+    "Республика Ингушетия":("республика ингушетия","ингушетия","назрань","магас"),
+    "Кабардино-Балкарская Республика":("кабардино-балкарская республика","кабардино-балкар","нальчик"),
+    "Республика Северная Осетия — Алания":("республика северная осетия","северная осетия","владикавказ"),
+    "Краснодарский край":("краснодарский край","краснодар"),
+    "Москва":("москва","г. москва"),
+    "Московская область":("московская область","московская обл","подмосковье"),
+}
+
+def _rss_region(blob):
+    text=(blob or "").lower()
+    for label,markers in REGION_MARKERS.items():
+        if any(m in text for m in markers):
+            return label
+    return ""
+
 def _rss_fallback(db):
     loaded=raw=0; seen=set()
     keywords=['благоустройство','уборка территорий','клининг','снег','очистка крыш','ремонт кровли','озеленение','ремонт зданий','строительство']
@@ -339,9 +357,13 @@ def _rss_fallback(db):
                     if not ext or ext in seen: continue
                     seen.add(ext); price=_price_from_rss(blob)
                     if not price or any(x in blob for x in EXCLUDE_KEYWORDS) or not any(x in blob for x in KEYWORDS): continue
+                    city=_rss_region(blob)
+                    if not city:
+                        # RSS search is global; do not leak tenders from unrelated regions
+                        # into the regional DealFinder profile.
+                        continue
                     adv=_advance_from_rss(blob,price)
                     deadline=_parse_date(blob)
-                    city=next((r for r in REGIONS if r in blob), "")
                     ptype="223-ФЗ" if "223-фз" in blob or "223 фз" in blob else "44-ФЗ"
                     status="ЗАХОДИМ" if adv is not None and adv>=MIN_ADV else ("ОТБОЙ" if adv is not None else "ПРОВЕРИТЬ АВАНС")
                     reason="RSS: аванс подтвержден" if status=="ЗАХОДИМ" else ("RSS: аванс ниже лимита" if status=="ОТБОЙ" else "RSS; требуется проверка карточки")

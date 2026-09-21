@@ -20,7 +20,7 @@ def extract_document_links(base_url, html):
         u = urljoin(base_url, raw)
         if u not in links:
             links.append(u)
-    return links[:30]
+    return links[:12]
 
 def _pdf_text(data):
     if not PdfReader:
@@ -52,7 +52,7 @@ def _xlsx_text(data):
 
 def fetch_and_extract(client, url):
     try:
-        r = client.get(url)
+        r = client.get(url, timeout=httpx.Timeout(12.0, connect=5.0))
         r.raise_for_status()
         ct = (r.headers.get("content-type") or "").lower()
         data = r.content
@@ -69,11 +69,11 @@ def fetch_and_extract(client, url):
     except Exception as e:
         return {"url": url, "kind": "error", "error": str(e), "text": ""}
 
-def collect_documents(url, timeout=35):
+def collect_documents(url, timeout=20):
     if not url:
         return {"links": [], "documents": [], "combined_text": ""}
     try:
-        with httpx.Client(timeout=timeout, follow_redirects=True,
+        with httpx.Client(timeout=httpx.Timeout(timeout, connect=8.0), follow_redirects=True,
                            headers={"User-Agent": "DealFinder/6.0"}) as client:
             r = client.get(url)
             r.raise_for_status()

@@ -13,7 +13,7 @@ services:
       - key: MIN_MARGIN_PCT
         value: "10"
       - key: DB_PATH
-        value: "deals.db"
+        value: "/data/deals.db"
       - key: GOSPLAN_ENDPOINTS
         value: "/fz44/purchases,/fz223/purchases"
       - key: GOSPLAN_MAX_PAGES

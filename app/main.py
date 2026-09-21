@@ -30,23 +30,30 @@ def startup():
 
 _last_bg_error = None
 _last_bg_result = None
+_last_review_error = None
+_last_review_result = None
 _refresh_lock = threading.Lock()
 _review_lock = threading.Lock()
 
 def _run_review_background(result):
-    global _last_bg_result
+    global _last_review_error, _last_review_result, _last_bg_result
     if result.get("status") not in ("ok","fallback") or os.getenv("AUTO_REVIEW","true").lower()!="true":
         return
     if not _review_lock.acquire(blocking=False):
         return
     try:
+        _last_review_error = None
+        _last_review_result = {"status":"running","checked":0}
         reviewed=review_unknown(DB, int(os.getenv("AUTO_REVIEW_LIMIT","20")))
+        _last_review_result = {"status":"done", **reviewed}
         current=dict(_last_bg_result or result)
-        current["review"]=reviewed
+        current["review"]=_last_review_result
         _last_bg_result=current
     except Exception as e:
+        _last_review_error = f"{type(e).__name__}: {e}"
+        _last_review_result = {"status":"error","error":_last_review_error}
         current=dict(_last_bg_result or result)
-        current["review_error"]=f"{type(e).__name__}: {e}"
+        current["review_error"]=_last_review_error
         _last_bg_result=current
     finally:
         _review_lock.release()
@@ -137,13 +144,13 @@ def health():
         buyers=c.execute("SELECT count(*) n FROM buyers").fetchone()["n"]
         hot=c.execute("SELECT count(*) n FROM buyers WHERE fit_status='ЗАХОДИМ'").fetchone()["n"]
         c.close()
-        return {"status":"ok","buyers":buyers,"hot":hot,"profile":"ТЕХСТРОЙ","experience_contracts":9,"experience_total_rub":101822407.84,"search_keywords":["клининг","уборка территорий","снег","очистка крыш"]}
+        return {"status":"ok","buyers":buyers,"hot":hot,"profile":"ТЕХСТРОЙ","experience_contracts":9,"experience_total_rub":101822407.84,"source_refresh_running":_refresh_lock.locked(),"review_running":_review_lock.locked(),"search_keywords":["благоустройство","общестрой","фасад","кровля","озеленение","клининг","уборка территорий","снег","очистка крыш"]}
     except Exception as e:
         return {"status":"error","error":str(e)}
 
 @app.get("/api/version")
 def version():
-    return {"version":"v5-TEKHSTROY","source":"GosPlan API v2","gosplan":"enabled","advance_min_pct":20.0,"profile":"ТЕХСТРОЙ","experience_contracts":9,"experience_total_rub":101822407.84,"manual_refresh":True}
+    return {"version":"v6-TEKHSTROY","source":"GosPlan API v2","gosplan":"enabled","advance_min_pct":20.0,"profile":"ТЕХСТРОЙ","experience_contracts":9,"experience_total_rub":101822407.84,"manual_refresh":True,"source_refresh_running":_refresh_lock.locked(),"review_running":_review_lock.locked()}
 
 @app.get("/api/stats")
 def stats():
@@ -156,32 +163,35 @@ def stats():
     return {"buyers":buyers,"suppliers":suppliers,"hot":hot}
 
 def _refresh_worker():
-    global _last_bg_error, _last_bg_result
+    global _last_bg_error, _last_bg_result, _last_review_error, _last_review_result
     if not _refresh_lock.acquire(blocking=False):
         return
     try:
         _last_bg_result={"status":"running","phase":"source"}
         _last_bg_error=None
+        _last_review_error=None
+        _last_review_result=None
         result=refresh()
-        _last_bg_result=result
+        _last_bg_result=dict(result, phase="source_done")
         if result.get("status") in ("ok","fallback"):
             _last_bg_error=None
             if os.getenv("AUTO_REVIEW","true").lower()=="true":
-                _last_bg_result=dict(result, phase="review")
                 threading.Thread(target=_run_review_background,args=(result,),daemon=True).start()
         else:
             _last_bg_error=result.get("error") or "refresh returned non-ok"
     except Exception as e:
         _last_bg_error=f"{type(e).__name__}: {e}"
-        _last_bg_result={"status":"error","error":_last_bg_error}
+        _last_bg_result={"status":"error","phase":"source","error":_last_bg_error}
     finally:
         _refresh_lock.release()
 
 def _manual_refresh():
     if _refresh_lock.locked():
-        return {"status":"busy","error":"Обновление уже выполняется","last_result":_last_bg_result}
+        return {"status":"busy","error":"Загрузка закупок уже выполняется","phase":"source","last_result":_last_bg_result}
+    if _review_lock.locked():
+        return {"status":"reviewing","message":"Загрузка закупок завершена. Идёт проверка документов и авансов.","phase":"review","last_result":_last_bg_result}
     threading.Thread(target=_refresh_worker,daemon=True).start()
-    return {"status":"started","message":"Обновление запущено"}
+    return {"status":"started","message":"Загрузка закупок запущена","phase":"source"}
 
 @app.post("/api/refresh")
 def api_refresh():
@@ -193,12 +203,23 @@ def api_refresh_get():
 
 @app.get("/api/refresh-status")
 def refresh_status():
-    running = _refresh_lock.locked() or _review_lock.locked()
+    source_running = _refresh_lock.locked()
+    review_running = _review_lock.locked()
     result = _last_bg_result or {}
+    if source_running:
+        status = "running"
+    elif review_running:
+        status = "reviewing"
+    else:
+        status = result.get("status") if result else "idle"
     return {
-        "status": "running" if running else (result.get("status") if result else "idle"),
-        "running": running,
+        "status": status,
+        "running": source_running,
+        "source_running": source_running,
+        "review_running": review_running,
         "last_error": _last_bg_error,
+        "review_error": _last_review_error,
+        "review_result": _last_review_result,
         "last_result": result,
     }
 
@@ -238,8 +259,12 @@ def diagnostics():
         "max_rub":float(os.getenv("DEAL_MAX_RUB","90000000")),
         "min_advance_pct":float(os.getenv("DEAL_MIN_ADVANCE_PCT","20")),
         "bg_limit_rub":float(os.getenv("DEAL_BG_LIMIT_RUB","17000000")),
+        "source_refresh_running":_refresh_lock.locked(),
+        "review_running":_review_lock.locked(),
         "last_bg_error":_last_bg_error,
-        "last_bg_result":{k:_last_bg_result.get(k) for k in ("status","loaded","raw","pages","source","server","api_mode","error","diagnostics") if _last_bg_result and k in _last_bg_result} if _last_bg_result else None,
+        "last_review_error":_last_review_error,
+        "last_review_result":_last_review_result,
+        "last_bg_result":{k:_last_bg_result.get(k) for k in ("status","phase","loaded","raw","pages","source","server","api_mode","error","diagnostics","review") if _last_bg_result and k in _last_bg_result} if _last_bg_result else None,
     }
 
 @app.post("/buyers")
@@ -289,5 +314,41 @@ body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#f5f5f7;
 <script>
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 async function load(){try{const sr=await fetch('/api/stats');if(!sr.ok)throw new Error('stats HTTP '+sr.status);const s=await sr.json();for(let k of ['buyers','suppliers','hot']){let el=document.getElementById(k);if(el)el.textContent=s[k]??0}const ar=await fetch('/api/hot');if(!ar.ok)throw new Error('hot HTTP '+ar.status);const a=await ar.json();const el=document.getElementById('list');el.innerHTML=a.length?'':'<div class="card">Пока подходящих закупок нет.</div>';a.forEach(x=>{const e=x.economics||{};el.innerHTML+=`<div class="card"><h3>ЗАХОДИМ · ${esc(x.title)}</h3><div class="muted">${esc(x.city||'Регион не указан')} · НМЦК ${Number(x.budget_rub||0).toLocaleString('ru-RU')} ₽ · аванс ${x.advance_pct??'—'}%</div><p>${esc((x.description||'').slice(0,280))}</p><div class="money">Маржа: ${Number(e.margin_rub||0).toLocaleString('ru-RU')} ₽</div><div class="muted">Свои деньги: ${Number(e.own_cash_needed_rub||0).toLocaleString('ru-RU')} ₽ · цена контракта: ${Number(e.contract_price||0).toLocaleString('ru-RU')} ₽</div>${x.deadline?'<div class="muted">Срок подачи: '+esc(x.deadline)+'</div>':''}${x.url?`<a class="btn" href="${esc(x.url)}" target="_blank">Открыть закупку</a>`:''}</div>`})}catch(e){document.getElementById('list').innerHTML='<div class="card">Ошибка загрузки: '+esc(e.message)+'</div>'}}
-async function refresh(){const b=document.querySelector('.refresh');if(b){b.disabled=true;b.textContent='ОБНОВЛЕНИЕ…'}try{const url=new URL('/api/refresh',window.location.href).href;const r=await fetch(url,{method:'GET',cache:'no-store',headers:{'Accept':'application/json'}});const raw=await r.text();let x;try{x=JSON.parse(raw)}catch(_){throw new Error('HTTP '+r.status+': сервер вернул не JSON')}if(!r.ok){throw new Error('HTTP '+r.status+': '+(x.error||x.status||'ошибка сервера'))}if(x.status==='busy'){alert('Обновление уже выполняется. Результаты обновятся автоматически.');await load();return}else if(x.status==='started'){alert('Обновление запущено. Результаты появятся автоматически.');pollRefreshStatus();return}else if(x.status==='rate_limited'){alert('Источник временно ограничил запросы. Повторить через '+(x.retry_after||300)+' сек.')}else if(x.status!=='ok'&&x.status!=='fallback'){alert('Ошибка источника: '+(x.error||x.warning||('статус '+x.status)+' | raw '+(x.raw??0)));}else if(x.loaded===0){alert('Источник ответил, но 0 закупок прошло фильтры. RAW: '+(x.raw||0)+' | страницы: '+(x.pages||0))}else{alert('Загружено: '+x.loaded+' закупок')}}catch(e){alert('Ошибка соединения: '+(e&&e.message?e.message:String(e)))}finally{if(b){b.disabled=false;b.textContent='ОБНОВИТЬ'}}await load()}async function pollRefreshStatus(){for(let i=0;i<300;i++){try{const r=await fetch('/api/refresh-status',{cache:'no-store'});const s=await r.json();if(!s.running){await load();if(s.status==='error'){const msg=s.last_error||(s.last_result&&s.last_result.error)||'неизвестная ошибка';alert('Ошибка источника: '+msg)}return}}catch(e){}await new Promise(r=>setTimeout(r,2000))}await load()}load();setInterval(load,60000)
+async function refresh(){
+const b=document.querySelector('.refresh');if(!b)return;
+if(b.disabled)return;
+b.disabled=true;b.textContent='ОБНОВЛЕНИЕ…';
+let monitor=false;
+try{
+ const url=new URL('/api/refresh',window.location.href).href;
+ const r=await fetch(url,{method:'GET',cache:'no-store',headers:{'Accept':'application/json'}});
+ const raw=await r.text();let x;try{x=JSON.parse(raw)}catch(_){throw new Error('HTTP '+r.status+': сервер вернул не JSON')}
+ if(!r.ok)throw new Error('HTTP '+r.status+': '+(x.error||x.status||'ошибка сервера'));
+ if(x.status==='started'||x.status==='busy'){monitor=true;await pollRefreshStatus();}
+ else if(x.status==='reviewing'){alert(x.message||'Проверка документов уже выполняется.');await load();}
+ else if(x.status==='rate_limited'){alert('Источник временно ограничил запросы. Повторить через '+(x.retry_after||300)+' сек.');await load();}
+ else if(x.status!=='ok'&&x.status!=='fallback'){alert('Ошибка источника: '+(x.error||x.warning||('статус '+x.status)+' | raw '+(x.raw??0)));await load();}
+ else if(x.loaded===0){alert('Источник ответил, но 0 закупок прошло фильтры. RAW: '+(x.raw||0)+' | страницы: '+(x.pages||0));await load();}
+ else{await load();}
+}catch(e){alert('Ошибка соединения: '+(e&&e.message?e.message:String(e)))}
+finally{b.disabled=false;b.textContent='ОБНОВИТЬ';await load()}
+}
+}async function pollRefreshStatus(){
+for(let i=0;i<120;i++){
+ try{
+  const r=await fetch('/api/refresh-status',{cache:'no-store'});
+  const st=await r.json();
+  const b=document.querySelector('.refresh');
+  if(st.source_running){if(b)b.textContent='ЗАГРУЗКА…';}
+  else{
+   await load();
+   if(st.review_running){if(b)b.textContent='ПРОВЕРКА…';}
+   if(st.last_error){alert('Ошибка источника: '+st.last_error);}
+   return;
+  }
+ }catch(e){}
+ await new Promise(r=>setTimeout(r,2000));
+}
+await load();
+}load();setInterval(load,60000)
 </script></html>'''

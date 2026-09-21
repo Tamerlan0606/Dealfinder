@@ -192,6 +192,28 @@ def diagnostics():
 def health():
     return {"status":"ok","service":"dealfinder-mobile","version":"7","db_path":DB}
 
+@app.get("/api/dashboard")
+def dashboard():
+    try:
+        c=connect(DB)
+        buyers=c.execute("SELECT count(*) n FROM buyers").fetchone()["n"]
+        sources=c.execute("SELECT count(DISTINCT source) n FROM buyers WHERE source IS NOT NULL AND source<>''").fetchone()["n"]
+        hot_count=c.execute("SELECT count(*) n FROM buyers WHERE fit_status='ЗАХОДИМ'").fetchone()["n"]
+        rows=c.execute("""SELECT * FROM buyers WHERE fit_status='ЗАХОДИМ' ORDER BY COALESCE(advance_pct,0) DESC, COALESCE(budget_rub,0) DESC, id DESC LIMIT 50""").fetchall()
+        result=[]
+        for row in rows:
+            d=dict(row)
+            raw=d.get("economics_json") or ""
+            try:
+                d["economics"]=json.loads(raw) if raw else tender_economics(d.get("budget_rub"),d.get("advance_pct"),security_rub=d.get("security_rub") or 0,description=(d.get("title") or "")+" "+(d.get("description") or ""))
+            except Exception:
+                d["economics"]={}
+            result.append(d)
+        c.close()
+        return {"status":"ok","stats":{"buyers":buyers,"suppliers":sources,"hot":hot_count},"hot":result}
+    except Exception as e:
+        return JSONResponse(status_code=500,content={"status":"error","error":f"{type(e).__name__}: {e}"})
+
 @app.get("/api/stats")
 def stats():
     c=connect(DB)

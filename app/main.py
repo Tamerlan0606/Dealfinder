@@ -247,7 +247,7 @@ try{
  if(x.status==='started'||x.status==='busy'){monitor=true;await pollRefreshStatus();}
  else if(x.status==='reviewing'){alert(x.message||'Проверка документов уже выполняется.');await load();}
  else if(x.status==='rate_limited'){alert('Источник временно ограничил запросы. Повторить через '+(x.retry_after||300)+' сек.');await load();}
- else if(x.status!=='ok'&&x.status!=='fallback'){alert('Ошибка источника: '+(x.error||x.warning||('статус '+x.status)+' | raw '+(x.raw??0)));await load();}
+ else if(x.status!=='ok'&&x.status!=='fallback'){alert('Ошибка источника: '+(x.error||x.warning||('статус '+x.status))+'\nИсточник: '+(x.source||'—')+'\nHTTP: '+(x.http_status||'—')+'\nRAW: '+(x.raw??0));await load();}
  else if(x.loaded===0){alert('Источник ответил, но 0 закупок прошло фильтры. RAW: '+(x.raw||0)+' | страницы: '+(x.pages||0));await load();}
  else{await load();}
 }catch(e){alert('Ошибка соединения: '+(e&&e.message?e.message:String(e)))}
@@ -263,7 +263,7 @@ for(let i=0;i<120;i++){
   else{
    await load();
    if(st.review_running){if(b)b.textContent='ПРОВЕРКА…';}
-   if(st.last_error){alert('Ошибка источника: '+st.last_error);}
+   if(st.last_error){const r=st.last_result||{}; alert('Ошибка источника: '+st.last_error+'\nИсточник: '+(r.source||'—')+'\nСтатус: '+(r.status||'—')+'\nHTTP: '+(r.http_status||'—'));}
    return;
   }
  }catch(e){}

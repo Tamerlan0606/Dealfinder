@@ -318,7 +318,6 @@ async function refresh(){
 const b=document.querySelector('.refresh');if(!b)return;
 if(b.disabled)return;
 b.disabled=true;b.textContent='ОБНОВЛЕНИЕ…';
-let monitor=false;
 try{
  const url=new URL('/api/refresh',window.location.href).href;
  const r=await fetch(url,{method:'GET',cache:'no-store',headers:{'Accept':'application/json'}});
@@ -333,7 +332,7 @@ try{
 }catch(e){alert('Ошибка соединения: '+(e&&e.message?e.message:String(e)))}
 finally{b.disabled=false;b.textContent='ОБНОВИТЬ';await load()}
 }
-}async function pollRefreshStatus(){
+async function pollRefreshStatus(){
 for(let i=0;i<120;i++){
  try{
   const r=await fetch('/api/refresh-status',{cache:'no-store'});

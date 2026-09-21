@@ -54,7 +54,15 @@ def review_unknown(db_path, limit=30):
                 m=re.search(r"обеспечени[ея]\s+(?:исполнения|контракта)[^%]{0,120}(\d{1,3}(?:[.,]\d+)?)\s*%",all_text,re.I)
                 if m:
                     sec=d["budget_rub"]*float(m.group(1).replace(",","."))/100
-            if adv is not None and adv >= minimum:
+            expired=False
+            if deadline:
+                try:
+                    expired = datetime.strptime(deadline,"%Y-%m-%d").replace(tzinfo=timezone.utc) < datetime.now(timezone.utc)
+                except Exception:
+                    expired=False
+            if expired:
+                status="ОТБОЙ"; reason="срок подачи истек"
+            elif adv is not None and adv >= minimum:
                 status="ЗАХОДИМ"; reason="аванс подтвержден карточкой/документами"
             elif adv is not None:
                 status="ОТБОЙ"; reason=f"аванс ниже {minimum:.0f}%"

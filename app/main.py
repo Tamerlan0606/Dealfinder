@@ -13,7 +13,7 @@ from .review import review_unknown
 
 load_dotenv()
 DB=os.getenv("DB_PATH") or ("/data/deals.db" if os.path.isdir("/data") else "deals.db")
-app=FastAPI(title="DealFinder Mobile v5-TEKHSTROY")
+app=FastAPI(title="DealFinder Mobile v6-TEKHSTROY")
 
 class Buyer(BaseModel):
     source:str; external_id:str|None=None; title:str; description:str=""; url:str=""; contact:str=""; budget_rub:float|None=None; city:str=""

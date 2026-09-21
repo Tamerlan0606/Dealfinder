@@ -40,6 +40,11 @@ class CoreRegressionTests(unittest.TestCase):
         self.assertIn('"review_running"', text)
         self.assertNotIn("\n}async function pollRefreshStatus()", text)
 
+
+    def test_rss_region_gate(self):
+        self.assertEqual(ingest._rss_region("Закупка в г. Магасе, Республика Ингушетия"), "Республика Ингушетия")
+        self.assertEqual(ingest._rss_region("Работы в Ростове-на-Дону"), "Ростовская область")
+        self.assertEqual(ingest._rss_region("Работы в Казани"), "")
     def test_render_search_depth(self):
         with open("render.yaml", encoding="utf-8") as f:
             text = f.read()

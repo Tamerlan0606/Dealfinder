@@ -227,7 +227,16 @@ def refresh():
     # Без production-ключа используем бесплатный тестовый ГосПлан API.
     # Документация ГосПлана подтверждает /fz44/purchases?limit=10&skip=0 без ключа.
     # Тестовый сервер ограничен по частоте запросов.
-    if not api_key and os.getenv("USE_GOSPLAN_TEST","true").lower() == "true":
+    # Без production API key не ходим в тестовый GosPlan: его публичный endpoint
+    # имеет жёсткий rate limit, из-за чего автоматический refresh быстро превращается
+    # в 429. В этом режиме используем публичный RSS ЕИС как основной источник.
+    if not api_key and os.getenv("USE_GOSPLAN_TEST","false").lower() != "true":
+        fb=_rss_fallback(db)
+        return {"status":"ok" if fb.get("loaded",0) else "fallback", "loaded":fb.get("loaded",0),
+                "raw":fb.get("raw",0), "pages":0, "source":"eis_rss_fallback",
+                "server":"zakupki.gov.ru", "api_mode":"public_rss",
+                "warning":"GosPlan API key не настроен; используется RSS ЕИС." if not fb.get("error") else f"RSS ЕИС: {fb.get('error')}"}
+    if not api_key and os.getenv("USE_GOSPLAN_TEST","false").lower() == "true":
         base="https://v2test.gosplan.info"
     base=os.getenv("GOSPLAN_BASE_URL","https://v2.gosplan.info" if api_key else "https://v2test.gosplan.info").rstrip("/")
     endpoints=[x.strip() for x in os.getenv("GOSPLAN_ENDPOINTS","/fz44/purchases,/fz223/purchases").split(",") if x.strip()]

@@ -5,10 +5,6 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python -m uvicorn run:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /api/health
-    disk:
-      name: dealfinder-data
-      mountPath: /data
-      sizeGB: 1
     envVars:
       - key: DRY_RUN
         value: "false"
@@ -17,7 +13,7 @@ services:
       - key: MIN_MARGIN_PCT
         value: "10"
       - key: DB_PATH
-        value: "/data/deals.db"
+        value: "deals.db"
       - key: GOSPLAN_ENDPOINTS
         value: "/fz44/purchases,/fz223/purchases"
       - key: GOSPLAN_MAX_PAGES
@@ -25,7 +21,7 @@ services:
       - key: REFRESH_SECONDS
         value: "3600"
       - key: AUTO_REFRESH
-        value: "false"
+        value: "true"
       - key: AUTO_REVIEW
         value: "true"
       - key: AUTO_REVIEW_LIMIT

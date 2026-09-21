@@ -41,7 +41,7 @@ services:
       - key: GOSPLAN_RATE_LIMIT_COOLDOWN
         value: "300"
       - key: USE_GOSPLAN_TEST
-        value: "true"
+        value: "false"
       - key: DEAL_MIN_RUB
         value: "10000000"
       - key: DEAL_MAX_RUB

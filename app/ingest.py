@@ -65,14 +65,14 @@ def _advance(item,blob,price):
             if price and n>100:return n/price*100
         if any(x in nk for x in amount_keys) and price and n>0:return n/price*100
     pats=[
-      r"(?:аванс|авансов(?:ый|ого|ая|ое)?|предоплат|предварительн(?:ой|ая|ую) оплат)[^%]{0,160}(\d{1,3}(?:[.,]\d+)?)\s*%",
-      r"(\d{1,3}(?:[.,]\d+)?)\s*%[^.]{0,100}(?:аванс|предоплат)"
+      r"(?:аванс|авансов(?:ый|ого|ая|ое)?|предоплат|предварительн(?:ой|ая|ую) оплат)[^%]{0,160}?(\d{1,3}(?:[.,]\d+)?)\s*%",
+      r"(\d{1,3}(?:[.,]\d+)?)\s*%[^.]{0,100}?(?:аванс|предоплат)"
     ]
     for p in pats:
         m=re.search(p,blob,re.I)
         if m:
             n=_num(m.group(1))
-            if n is not None:return n
+            if n is not None and 0 < n <= 100:return n
     return None
 
 def _parse_date(s):
@@ -300,8 +300,8 @@ ON CONFLICT(source,external_id) DO UPDATE SET title=excluded.title,description=e
 
 def _advance_from_rss(blob, price):
     patterns=[
-        r"(?:аванс|авансов(?:ый|ого|ая|ое)?|предоплат|предварительн(?:ой|ая|ую) оплат)[^%]{0,220}(\d{1,3}(?:[.,]\d+)?)\s*%",
-        r"(\d{1,3}(?:[.,]\d+)?)\s*%[^.]{0,160}(?:аванс|авансов|предоплат)"
+        r"(?:аванс|авансов(?:ый|ого|ая|ое)?|предоплат|предварительн(?:ой|ая|ую) оплат)[^%]{0,220}?(\d{1,3}(?:[.,]\d+)?)\s*%",
+        r"(\d{1,3}(?:[.,]\d+)?)\s*%[^.]{0,160}?(?:аванс|авансов|предоплат)"
     ]
     for p in patterns:
         m=re.search(p,blob,re.I)

@@ -63,8 +63,14 @@ def _background_refresh():
     time.sleep(3)
     while True:
         try:
-            with _refresh_lock:
+            if not _refresh_lock.acquire(blocking=False):
+                # A manual refresh is already running; do not queue a second source crawl.
+                time.sleep(30)
+                continue
+            try:
                 result = refresh()
+            finally:
+                _refresh_lock.release()
             _last_bg_result = result
             if result.get("status") in ("ok","fallback"):
                 _last_bg_error = None

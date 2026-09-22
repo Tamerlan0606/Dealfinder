@@ -48,8 +48,8 @@ class CoreRegressionTests(unittest.TestCase):
     def test_render_search_depth(self):
         with open("render.yaml", encoding="utf-8") as f:
             text = f.read()
-        self.assertIn('key: GOSPLAN_MAX_PAGES\n        value: "4"', text)
-        self.assertIn('key: GOSPLAN_TEST_INTERVAL\n        value: "8"', text)
+        self.assertIn('key: GOSPLAN_MAX_PAGES\n        value: "2"', text)
+        self.assertIn('key: GOSPLAN_TEST_INTERVAL\n        value: "10"', text)
         self.assertNotIn("    disk:", text)
         self.assertIn('key: AUTO_REFRESH\n        value: "false"', text)
 

@@ -17,13 +17,13 @@ services:
       - key: GOSPLAN_ENDPOINTS
         value: "/fz44/purchases,/fz223/purchases"
       - key: GOSPLAN_MAX_PAGES
-        value: "4"
+        value: "2"
       - key: REFRESH_SECONDS
         value: "3600"
       - key: AUTO_REFRESH
-        value: "true"
+        value: "false"
       - key: AUTO_REVIEW
-        value: "true"
+        value: "false"
       - key: AUTO_REVIEW_LIMIT
         value: "20"
       - key: DEAL_BID_DISCOUNT_PCT
@@ -37,7 +37,7 @@ services:
       - key: GOSPLAN_API_KEY
         sync: false
       - key: GOSPLAN_TEST_INTERVAL
-        value: "8"
+        value: "10"
       - key: GOSPLAN_RATE_LIMIT_COOLDOWN
         value: "300"
       - key: USE_GOSPLAN_TEST

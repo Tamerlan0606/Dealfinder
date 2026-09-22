@@ -25,7 +25,7 @@ class Match(BaseModel):
 @app.on_event("startup")
 def startup():
     connect(DB).close()
-    if os.getenv("AUTO_REFRESH","true").lower()=="true":
+    if os.getenv("AUTO_REFRESH","false").lower()=="true":
         threading.Thread(target=_background_refresh, daemon=True).start()
 
 _last_bg_error = None
@@ -74,7 +74,7 @@ def _background_refresh():
             _last_bg_result = result
             if result.get("status") in ("ok","fallback"):
                 _last_bg_error = None
-                if os.getenv("AUTO_REVIEW","true").lower()=="true":
+                if os.getenv("AUTO_REVIEW","false").lower()=="true":
                     threading.Thread(target=_run_review_background,args=(result,),daemon=True).start()
             else:
                 _last_bg_error = result.get("error") or "refresh returned non-ok"

@@ -37,7 +37,7 @@ _review_lock = threading.Lock()
 
 def _run_review_background(result):
     global _last_review_error, _last_review_result, _last_bg_result
-    if result.get("status") not in ("ok","fallback") or os.getenv("AUTO_REVIEW","true").lower()!="true":
+    if result.get("status") not in ("ok","fallback") or os.getenv("AUTO_REVIEW","false").lower()!="true":
         return
     if not _review_lock.acquire(blocking=False):
         return
@@ -96,7 +96,7 @@ def _refresh_worker():
         _last_bg_result=dict(result, phase="source_done")
         if result.get("status") in ("ok","fallback"):
             _last_bg_error=None
-            if os.getenv("AUTO_REVIEW","true").lower()=="true":
+            if os.getenv("AUTO_REVIEW","false").lower()=="true":
                 threading.Thread(target=_run_review_background,args=(result,),daemon=True).start()
         else:
             _last_bg_error=result.get("error") or "refresh returned non-ok"

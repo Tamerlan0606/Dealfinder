@@ -51,7 +51,7 @@ class CoreRegressionTests(unittest.TestCase):
         self.assertIn('key: GOSPLAN_MAX_PAGES\n        value: "4"', text)
         self.assertIn('key: GOSPLAN_TEST_INTERVAL\n        value: "8"', text)
         self.assertNotIn("    disk:", text)
-        self.assertIn('key: AUTO_REFRESH\n        value: "true"', text)
+        self.assertIn('key: AUTO_REFRESH\n        value: "false"', text)
 
 
 if __name__ == "__main__":

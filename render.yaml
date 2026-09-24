@@ -66,3 +66,11 @@ services:
         sync: false
       - key: SMTP_FROM
         sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GMAIL_REDIRECT_URI
+        value: "https://dealfinder-mobile.onrender.com/api/gmail/callback"
+      - key: GMAIL_TOKEN_PATH
+        value: "/data/gmail_token.json"

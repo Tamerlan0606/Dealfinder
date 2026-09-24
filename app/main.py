@@ -10,6 +10,7 @@ from .telegram import notify
 from .outreach import send
 from .ingest import refresh
 from .review import review_unknown
+from .gmail_oauth import auth_url as gmail_auth_url, finish as gmail_finish, status as gmail_status, send_email as gmail_send
 
 load_dotenv()
 DB=os.getenv("DB_PATH") or ("/data/deals.db" if os.path.isdir("/data") else "deals.db")
@@ -278,6 +279,37 @@ def match(m:Match):
 @app.post("/outreach")
 def outreach(to:str, subject:str, body:str):
     return send(to,subject,body)
+
+@app.get("/api/gmail/status")
+def api_gmail_status():
+    return gmail_status()
+
+@app.get("/api/gmail/auth")
+def api_gmail_auth():
+    try:
+        url,state=gmail_auth_url()
+        return {"status":"auth_required","url":url,"state":state}
+    except Exception as e:
+        return JSONResponse(status_code=500,content={"status":"error","error":f"{type(e).__name__}: {e}"})
+
+@app.get("/api/gmail/callback")
+def api_gmail_callback(code:str|None=None,error:str|None=None):
+    if error:
+        return HTMLResponse(f"<h3>Google authorization cancelled</h3><p>{html.escape(error)}</p>",status_code=400)
+    if not code:
+        return HTMLResponse("<h3>Не получен код Google OAuth.</h3>",status_code=400)
+    try:
+        result=gmail_finish(code)
+        return HTMLResponse("<h3>Gmail подключён</h3><p>"+html.escape(str(result.get("email") or ""))+"</p><p>Можно закрыть это окно и вернуться в DealFinder.</p>")
+    except Exception as e:
+        return HTMLResponse("<h3>Ошибка подключения Gmail</h3><pre>"+html.escape(f"{type(e).__name__}: {e}")+"</pre>",status_code=500)
+
+@app.post("/api/gmail/send")
+def api_gmail_send(to:str, subject:str, body:str):
+    try:
+        return gmail_send(to,subject,body)
+    except Exception as e:
+        return JSONResponse(status_code=500,content={"status":"error","error":f"{type(e).__name__}: {e}"})
 
 @app.get("/", response_class=HTMLResponse)
 def home():

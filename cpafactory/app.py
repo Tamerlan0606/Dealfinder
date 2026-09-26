@@ -7,15 +7,30 @@ from psycopg.rows import dict_row
 
 app = FastAPI(title="CPA Factory")
 
+class SQLiteConn:
+    def __init__(self, path):
+        self.conn = sqlite3.connect(path)
+        self.conn.row_factory = sqlite3.Row
+    def execute(self, sql, params=()):
+        return self.conn.execute(sql.replace("%s", "?"), params)
+    def __enter__(self):
+        return self
+    def __exit__(self, exc_type, exc, tb):
+        if exc_type:
+            self.conn.rollback()
+        else:
+            self.conn.commit()
+        self.conn.close()
+
 def db():
     url = os.environ.get("DATABASE_URL", "")
-    # Temporary resilience: if Render still contains an unresolved Blueprint
-    # placeholder, keep the web app usable with local SQLite instead of crashing.
     if not url or url.startswith("${{"):
-        conn = sqlite3.connect("/tmp/cpafactory.db")
-        conn.row_factory = sqlite3.Row
-        return conn
+        return SQLiteConn("/tmp/cpafactory.db")
     return psycopg.connect(url, row_factory=dict_row)
+
+def using_sqlite():
+    url = os.environ.get("DATABASE_URL", "")
+    return (not url) or url.startswith("${{")
 
 def init():
     with db() as c:

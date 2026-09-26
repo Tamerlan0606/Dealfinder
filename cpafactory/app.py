@@ -1,4 +1,4 @@
-import os, re
+import os, re, sqlite3
 from urllib.parse import urlencode, urlparse, parse_qsl, urlunparse
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -8,7 +8,14 @@ from psycopg.rows import dict_row
 app = FastAPI(title="CPA Factory")
 
 def db():
-    return psycopg.connect(os.environ["DATABASE_URL"], row_factory=dict_row)
+    url = os.environ.get("DATABASE_URL", "")
+    # Temporary resilience: if Render still contains an unresolved Blueprint
+    # placeholder, keep the web app usable with local SQLite instead of crashing.
+    if not url or url.startswith("${{"):
+        conn = sqlite3.connect("/tmp/cpafactory.db")
+        conn.row_factory = sqlite3.Row
+        return conn
+    return psycopg.connect(url, row_factory=dict_row)
 
 def init():
     with db() as c:

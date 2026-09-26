@@ -32,6 +32,10 @@ def using_sqlite():
     url = os.environ.get("DATABASE_URL", "")
     return (not url) or url.startswith("${{")
 
+def using_sqlite():
+    url = os.environ.get("DATABASE_URL", "")
+    return (not url) or url.startswith("${{")
+
 def init():
     with db() as c:
         if using_sqlite():

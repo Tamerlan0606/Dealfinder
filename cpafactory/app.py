@@ -302,6 +302,8 @@ table{width:100%;border-collapse:collapse;font-size:14px}td,th{text-align:left;p
 <select id="offerSelect"></select><select id="platform"><option>rutube</option><option>vk</option><option>dzen</option></select>
 <button onclick="generate()">Сгенерировать сценарий</button><div id="generated"></div></div>
 <div class="card"><h2>Контент</h2><div id="content">Загрузка…</div></div>
+<div class="card"><h2>Очередь RUTUBE</h2><p class="small muted">Подготовленные материалы. Загрузку и отложенную публикацию выполняем в Студии RUTUBE.</p><div id="queue">Загрузка…</div></div>
+<div class="card"><h2>Доход</h2><div id="revenue">Загрузка…</div></div>
 </main><script>
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 async function load(){
@@ -312,6 +314,12 @@ async function load(){
  o.map(x=>'<tr><td>'+esc(x.name)+'</td><td>'+esc(x.merchant)+'</td><td>'+Number(x.price||0).toLocaleString('ru-RU')+'</td><td>'+Number(x.commission||0).toLocaleString('ru-RU')+' ₽</td><td>'+x.clicks+'</td></tr>').join('')+'</table>':'Пока нет офферов';
  content.innerHTML=c.length?'<table><tr><th>Оффер</th><th>Площадка</th><th>Статус</th><th>Переходы</th><th>Ссылка</th></tr>'+
  c.map(x=>'<tr><td>'+esc(x.offer_name)+'</td><td>'+esc(x.platform)+'</td><td>'+esc(x.status)+'</td><td>'+x.clicks+'</td><td><a href="/go/'+x.offer_id+'?content_id='+x.id+'" target="_blank">тест</a></td></tr>').join('')+'</table>':'Пока нет материалов';
+ let q=await (await fetch('/api/publish-queue')).json();
+ queue.innerHTML=q.length?'<table><tr><th>Материал</th><th>Дата</th><th>Статус</th><th>RUTUBE</th></tr>'+
+ q.map(x=>'<tr><td>'+esc(x.title)+'</td><td>'+esc(x.scheduled_at||'—')+'</td><td>'+esc(x.status)+'</td><td>'+(x.rutube_url?'<a href="'+esc(x.rutube_url)+'" target="_blank">открыть</a>':'—')+'</td></tr>').join('')+'</table>':'Очередь пуста';
+ let rv=await (await fetch('/api/revenue')).json();
+ revenue.innerHTML=rv.length?'<table><tr><th>Оффер</th><th>Событие</th><th>Сумма</th><th>Статус</th></tr>'+
+ rv.map(x=>'<tr><td>'+esc(x.offer_name)+'</td><td>'+esc(x.event_type)+'</td><td>'+Number(x.amount||0).toLocaleString('ru-RU')+' ₽</td><td>'+esc(x.status)+'</td></tr>').join('')+'</table>':'Пока нет событий дохода';
 }
 function adminToken(){
  let t=localStorage.getItem('cf_admin_token')||'';
@@ -331,7 +339,13 @@ async function addOffer(){
 async function generate(){
  let r=await adminFetch('/api/content/generate',{method:'POST',body:JSON.stringify({offer_id:offerSelect.value,platform:platform.value})});
  if(!r.ok)return;
- let x=await r.json(); generated.innerHTML='<p><b>'+esc(x.title)+'</b></p><textarea rows="6" readonly>'+esc(x.script)+'</textarea><div class="ok">Материал создан со статусом draft.</div>';load();
+ let x=await r.json(); generated.innerHTML='<p><b>'+esc(x.title)+'</b></p><textarea rows="6" readonly>'+esc(x.script)+'</textarea><button onclick="queueItem('+x.id+')">Поставить в очередь RUTUBE</button><div class="ok">Материал создан со статусом draft.</div>';load();
+}
+async function queueItem(id){
+ let when=prompt('Дата/время публикации ISO, например 2026-09-27T12:00:00+03:00','');
+ if(when===null)return;
+ let r=await adminFetch('/api/publish-queue',{method:'POST',body:JSON.stringify({content_id:id,scheduled_at:when||null})});
+ if(r.ok){alert('Добавлено в очередь.');load();}
 }
 load();
 </script></body></html>"""

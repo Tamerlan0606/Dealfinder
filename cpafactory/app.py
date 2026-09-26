@@ -113,7 +113,8 @@ def offers():
           group by o.id order by o.id desc""").fetchall()
 
 @app.post("/api/offers")
-async def add_offer(request: Request, x_admin_token: str | None = Header(default=None)):\n    require_admin(x_admin_token)
+async def add_offer(request: Request, x_admin_token: str | None = Header(default=None)):
+    require_admin(x_admin_token)
     x=await request.json()
     if not x.get("name"): raise HTTPException(400, "name обязателен")
     with db() as c:
@@ -123,7 +124,8 @@ async def add_offer(request: Request, x_admin_token: str | None = Header(default
            x.get("tracking_url"),x.get("traffic_rules"))).fetchone()
 
 @app.post("/api/offers/import")
-async def import_offers(request: Request, x_admin_token: str | None = Header(default=None)):\n    require_admin(x_admin_token)
+async def import_offers(request: Request, x_admin_token: str | None = Header(default=None)):
+    require_admin(x_admin_token)
     x=await request.json()
     items=x if isinstance(x,list) else x.get("offers",[])
     added=0
@@ -144,7 +146,8 @@ def content():
           from content left join offers on offers.id=content.offer_id order by content.id desc""").fetchall()
 
 @app.post("/api/content")
-async def add_content(request: Request, x_admin_token: str | None = Header(default=None)):\n    require_admin(x_admin_token)
+async def add_content(request: Request, x_admin_token: str | None = Header(default=None)):
+    require_admin(x_admin_token)
     x=await request.json()
     with db() as c:
         return c.execute("""insert into content(offer_id,title,script,platform,status)
@@ -152,7 +155,8 @@ async def add_content(request: Request, x_admin_token: str | None = Header(defau
           (x.get("offer_id"),x.get("title"),x.get("script"),x.get("platform","rutube"),x.get("status","draft"))).fetchone()
 
 @app.post("/api/content/generate")
-async def generate_content(request: Request, x_admin_token: str | None = Header(default=None)):\n    require_admin(x_admin_token)
+async def generate_content(request: Request, x_admin_token: str | None = Header(default=None)):
+    require_admin(x_admin_token)
     x=await request.json()
     offer_id=int(x["offer_id"])
     with db() as c:
@@ -169,7 +173,8 @@ async def generate_content(request: Request, x_admin_token: str | None = Header(
           (offer_id,title,script,x.get("platform","rutube"))).fetchone()
 
 @app.post("/api/content/{content_id}/publish-ready")
-def publish_ready(content_id:int, x_admin_token: str | None = Header(default=None)):\n    require_admin(x_admin_token)
+def publish_ready(content_id:int, x_admin_token: str | None = Header(default=None)):
+    require_admin(x_admin_token)
     with db() as c:
         row=c.execute("update content set status='ready' where id=%s returning *",(content_id,)).fetchone()
         if not row: raise HTTPException(404,"Материал не найден")

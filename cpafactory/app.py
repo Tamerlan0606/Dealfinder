@@ -100,6 +100,19 @@ def init():
         c.execute("create index if not exists idx_queue_status on publish_queue(status)")
         c.execute("create index if not exists idx_revenue_offer on revenue_events(offer_id)")
         if using_sqlite():
+            c.execute("""create table if not exists pipeline_runs(
+              id integer primary key autoincrement, status text, offer_id integer references offers(id),
+              content_id integer references content(id), queue_id integer references publish_queue(id),
+              message text, created_at text default CURRENT_TIMESTAMP
+            )""")
+        else:
+            c.execute("""create table if not exists pipeline_runs(
+              id bigserial primary key, status text, offer_id int references offers(id),
+              content_id int references content(id), queue_id int references publish_queue(id),
+              message text, created_at timestamptz default now()
+            )""")
+        c.execute("create index if not exists idx_pipeline_runs_created on pipeline_runs(created_at)")
+        if using_sqlite():
             for stmt in [
                 "alter table offers add column source text",
                 "alter table offers add column external_id text",
@@ -245,6 +258,95 @@ def cpa_cron_import(x_cron_token: str | None = Header(default=None)):
     if not expected or x_cron_token != expected:
         raise HTTPException(401,"Недействительный cron-токен")
     return cpa_import(ADMIN_TOKEN)
+
+
+@app.get("/api/pipeline/status")
+def pipeline_status():
+    with db() as c:
+        active = c.execute("select count(*) n from offers where active=true").fetchone()["n"]
+        queued = c.execute("select count(*) n from publish_queue where status='queued'").fetchone()["n"]
+        last = c.execute("""select p.*, o.name offer_name, c.title
+          from pipeline_runs p
+          left join offers o on o.id=p.offer_id
+          left join content c on c.id=p.content_id
+          order by p.id desc limit 1""").fetchone()
+    top = cpa_top(1)
+    return {
+        "admitad_configured": bool(os.getenv("ADMITAD_ACCESS_TOKEN") and os.getenv("ADMITAD_WEBSITE_ID")),
+        "active_offers": active, "queued": queued,
+        "top_offer": dict(top[0]) if top else None,
+        "last_run": dict(last) if last else None
+    }
+
+def _pipeline_run():
+    try:
+        imported = cpa_import(ADMIN_TOKEN)
+        if imported.get("status") == "not_configured":
+            msg = imported.get("message", "Admitad не подключён")
+            with db() as c:
+                c.execute("insert into pipeline_runs(status,message) values(%s,%s)", ("not_configured", msg))
+            return {"status":"not_configured","message":msg}
+        top = cpa_top(1)
+        if not top:
+            msg = "После импорта нет активных офферов"
+            with db() as c:
+                c.execute("insert into pipeline_runs(status,message) values(%s,%s)", ("empty", msg))
+            return {"status":"empty","message":msg}
+        o = top[0]
+        offer_id = int(o["id"])
+        name = o["name"]
+        price = o["price"] or 0
+        cpa_rate = o["cpa_rate"] or ""
+        rate_text = f"{cpa_rate}%" if cpa_rate and "%" not in str(cpa_rate) else str(cpa_rate)
+        title = f"{name}: стоит ли покупать? Цена {price:g} ₽"
+        # Avoid generating the same offer repeatedly within 24 hours.
+        with db() as c:
+            if using_sqlite():
+                recent = c.execute("""select id from content
+                  where offer_id=%s and created_at > datetime('now','-24 hours') limit 1""",(offer_id,)).fetchone()
+            else:
+                recent = c.execute("""select id from content
+                  where offer_id=%s and created_at > now()-interval '24 hours' limit 1""",(offer_id,)).fetchone()
+            if recent:
+                msg = f"Для оффера уже есть свежий материал: #{recent['id']}"
+                c.execute("insert into pipeline_runs(status,offer_id,message) values(%s,%s,%s)",("skipped",offer_id,msg))
+                return {"status":"skipped","offer_id":offer_id,"content_id":recent["id"],"message":msg}
+            script=(f"Сегодня разбираем товар «{name}». Цена — {price:g} ₽. "
+                    f"Смотрим характеристики, кому он подходит и на что обратить внимание перед покупкой. "
+                    f"Ссылка на актуальную цену — в описании. "
+                    f"Партнёрская ставка по программе: {rate_text or 'уточняется'}.")
+            row=c.execute("""insert into content(offer_id,title,script,platform,status)
+              values(%s,%s,%s,'rutube','ready') returning *""",
+              (offer_id,title,script)).fetchone()
+            content_id=int(row["id"])
+            q=c.execute("""insert into publish_queue(content_id,scheduled_at,status)
+              values(%s,null,'queued') returning *""",(content_id,)).fetchone()
+            queue_id=int(q["id"])
+            c.execute("""insert into pipeline_runs(status,offer_id,content_id,queue_id,message)
+              values(%s,%s,%s,%s,%s)""",
+              ("ok",offer_id,content_id,queue_id,"Оффер импортирован, материал создан и поставлен в очередь RUTUBE"))
+        return {"status":"ok","offer_id":offer_id,"content_id":content_id,"queue_id":queue_id,
+                "offer_name":name,"message":"Цикл выполнен"}
+    except HTTPException as e:
+        with db() as c:
+            c.execute("insert into pipeline_runs(status,message) values(%s,%s)",("error",str(e.detail)))
+        raise
+    except Exception as e:
+        with db() as c:
+            c.execute("insert into pipeline_runs(status,message) values(%s,%s)",("error",str(e)))
+        raise HTTPException(500, f"Pipeline: {e}")
+
+@app.post("/api/pipeline/run")
+def pipeline_run(x_admin_token: str | None = Header(default=None)):
+    require_admin(x_admin_token)
+    return _pipeline_run()
+
+@app.post("/api/pipeline/cron")
+def pipeline_cron(x_cron_token: str | None = Header(default=None)):
+    expected=os.getenv("CPA_CRON_TOKEN","").strip()
+    if not expected or x_cron_token != expected:
+        raise HTTPException(401,"Недействительный cron-токен")
+    return _pipeline_run()
 
 @app.post("/api/offers")
 async def add_offer(request: Request, x_admin_token: str | None = Header(default=None)):
@@ -398,7 +500,8 @@ table{width:100%;border-collapse:collapse;font-size:14px}td,th{text-align:left;p
 .small{font-size:12px}.ok{color:#16803c}@media(max-width:700px){.grid{grid-template-columns:repeat(2,1fr)}table{display:block;overflow:auto;white-space:nowrap}}
 </style></head><body><main>
 <div class="card"><h1>CPA Factory</h1><div class="muted">Оффер → трекинг → контент → очередь публикации → аналитика</div>
-<div class="small muted">Admitad: <span id="cpaStatus">проверка…</span></div>
+<div class="small muted">Admitad: <span id="cpaStatus">проверка…</span></div><div style="margin-top:10px"><b>Автопилот:</b> <span id="pipelineStatus">проверка…</span>
+<button onclick="runPipeline()">Запустить цикл</button></div>
 <button onclick="importCPA()">Обновить офферы из Admitad</button>
 <button onclick="showTop()">Показать приоритетные офферы</button>
 <div id="topOffers"></div>
@@ -406,7 +509,7 @@ table{width:100%;border-collapse:collapse;font-size:14px}td,th{text-align:left;p
 <div class="grid"><div class="card"><div class="muted">Активные офферы</div><div id="m1" class="metric">0</div></div>
 <div class="card"><div class="muted">Материалы</div><div id="m2" class="metric">0</div></div>
 <div class="card"><div class="muted">Переходы</div><div id="m3" class="metric">0</div></div>
-<div class="card"><div class="muted">Комиссия</div><div id="m4" class="metric">0 ₽</div></div></div>
+<div class="card"><div class="muted">Доход</div><div id="m4" class="metric">0 ₽</div></div></div>
 <div class="card"><h2>Добавить оффер</h2>
 <input id="name" placeholder="Название товара"><input id="merchant" placeholder="Магазин / CPA-сеть">
 <input id="price" placeholder="Цена"><input id="commission" placeholder="Комиссия, ₽">
@@ -424,7 +527,7 @@ const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&g
 async function load(){
  let o=await (await fetch('/api/offers')).json(), c=await (await fetch('/api/content')).json(), s=await (await fetch('/api/stats')).json();
  let cs=await (await fetch('/api/cpa/status')).json(); cpaStatus.textContent=cs.admitad_configured?'подключён':'нужна авторизация';
- m1.textContent=s.offers;m2.textContent=s.content;m3.textContent=s.clicks;m4.textContent=Number(s.commission||0).toLocaleString('ru-RU')+' ₽';
+ m1.textContent=s.offers;m2.textContent=s.content;m3.textContent=s.clicks;m4.textContent=Number(s.revenue||0).toLocaleString('ru-RU')+' ₽';
  offerSelect.innerHTML=o.map(x=>'<option value="'+x.id+'">'+esc(x.name)+'</option>').join('');
  offers.innerHTML=o.length?'<table><tr><th>Товар</th><th>Сеть</th><th>Цена</th><th>Комиссия</th><th>Переходы</th></tr>'+
  o.map(x=>'<tr><td>'+esc(x.name)+'</td><td>'+esc(x.merchant)+'</td><td>'+Number(x.price||0).toLocaleString('ru-RU')+'</td><td>'+Number(x.commission||0).toLocaleString('ru-RU')+' ₽</td><td>'+x.clicks+'</td></tr>').join('')+'</table>':'Пока нет офферов';
@@ -461,6 +564,21 @@ async function showTop(){
  topOffers.innerHTML=x.length?'<table><tr><th>Оффер</th><th>EPC</th><th>CR</th><th>Рейтинг</th><th>Приоритет</th></tr>'+
  x.map(v=>'<tr><td>'+esc(v.name)+'</td><td>'+Number(v.epc||0).toLocaleString('ru-RU')+'</td><td>'+Number(v.cr||0).toLocaleString('ru-RU')+'%</td><td>'+Number(v.rating||0).toLocaleString('ru-RU')+'</td><td>'+v.score+'</td></tr>').join('')+'</table>':'Подходящих активных офферов пока нет';
 }
+async function refreshPipelineStatus(){
+ try{
+  let p=await (await fetch('/api/pipeline/status')).json();
+  if(p.last_run){pipelineStatus.textContent=p.last_run.status==='ok'?'готов: материал в очереди':p.last_run.message||p.last_run.status;}
+  else pipelineStatus.textContent=p.admitad_configured?'готов к запуску':'нужна авторизация Admitad';
+ }catch(e){pipelineStatus.textContent='ошибка проверки';}
+}
+async function runPipeline(){
+ let r=await adminFetch('/api/pipeline/run',{method:'POST'});
+ let x=await r.json().catch(()=>({}));
+ if(x.status==='not_configured'){alert('Admitad пока не подключён. Сначала нужен API-токен и ID площадки.');return;}
+ if(!r.ok){alert(x.detail||x.message||'Ошибка автопилота');return;}
+ alert(x.status==='skipped'?'Свежий материал уже существует.':'Готово: оффер выбран, материал создан и поставлен в очередь RUTUBE.');
+ load(); refreshPipelineStatus();
+}
 async function addOffer(){
  let r=await adminFetch('/api/offers',{method:'POST',body:JSON.stringify({name:name.value,merchant:merchant.value,price:price.value,commission:commission.value,tracking_url:url.value,traffic_rules:rules.value})});
  if(r.ok){['name','merchant','price','commission','url','rules'].forEach(x=>document.getElementById(x).value='');load();}
@@ -476,5 +594,5 @@ async function queueItem(id){
  let r=await adminFetch('/api/publish-queue',{method:'POST',body:JSON.stringify({content_id:id,scheduled_at:when||null})});
  if(r.ok){alert('Добавлено в очередь.');load();}
 }
-load();
+load(); refreshPipelineStatus();
 </script></body></html>"""

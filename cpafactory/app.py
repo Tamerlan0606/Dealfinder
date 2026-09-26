@@ -32,10 +32,6 @@ def using_sqlite():
     url = os.environ.get("DATABASE_URL", "")
     return (not url) or url.startswith("${{")
 
-def using_sqlite():
-    url = os.environ.get("DATABASE_URL", "")
-    return (not url) or url.startswith("${{")
-
 def init():
     with db() as c:
         if using_sqlite():
@@ -80,6 +76,10 @@ def startup():
 @app.get("/health")
 def health():
     return {"ok": True, "service": "cpa-factory"}
+
+@app.get("/", response_class=HTMLResponse)
+def home():
+    return HTMLResponse(PAGE)
 
 def add_tracking(url: str, subid: str) -> str:
     if not url: return ""
@@ -173,6 +173,14 @@ def publish_ready(content_id:int):
 @app.get("/api/stats")
 def stats():
     with db() as c:
+        if using_sqlite():
+            return c.execute("""select
+              (select count(*) from offers where active=1) offers,
+              (select count(*) from content) content,
+              (select coalesce(sum(clicks),0) from content) clicks,
+              (select coalesce(sum(conversions),0) from content) conversions,
+              (select coalesce(sum(approved_commission),0) from content) commission,
+              (select count(*) from click_events where created_at > datetime('now','-24 hours')) clicks24""").fetchone()
         return c.execute("""select
           (select count(*) from offers where active) offers,
           (select count(*) from content) content,

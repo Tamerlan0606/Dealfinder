@@ -73,6 +73,32 @@ def init():
             )""")
         c.execute("create index if not exists idx_click_offer on click_events(offer_id)")
         c.execute("create index if not exists idx_click_content on click_events(content_id)")
+        if using_sqlite():
+            c.execute("""create table if not exists publish_queue(
+              id integer primary key autoincrement, content_id integer references content(id),
+              scheduled_at text, status text default 'queued', rutube_url text,
+              published_at text, created_at text default CURRENT_TIMESTAMP
+            )""")
+            c.execute("""create table if not exists revenue_events(
+              id integer primary key autoincrement, offer_id integer references offers(id),
+              content_id integer references content(id), subid text, event_type text,
+              amount real default 0, status text default 'approved',
+              event_at text default CURRENT_TIMESTAMP
+            )""")
+        else:
+            c.execute("""create table if not exists publish_queue(
+              id serial primary key, content_id int references content(id),
+              scheduled_at timestamptz, status text default 'queued', rutube_url text,
+              published_at timestamptz, created_at timestamptz default now()
+            )""")
+            c.execute("""create table if not exists revenue_events(
+              id bigserial primary key, offer_id int references offers(id),
+              content_id int references content(id), subid text, event_type text,
+              amount numeric default 0, status text default 'approved',
+              event_at timestamptz default now()
+            )""")
+        c.execute("create index if not exists idx_queue_status on publish_queue(status)")
+        c.execute("create index if not exists idx_revenue_offer on revenue_events(offer_id)")
 
 @app.on_event("startup")
 def startup():
@@ -179,6 +205,53 @@ def publish_ready(content_id:int, x_admin_token: str | None = Header(default=Non
         row=c.execute("update content set status='ready' where id=%s returning *",(content_id,)).fetchone()
         if not row: raise HTTPException(404,"Материал не найден")
         return row
+
+@app.post("/api/publish-queue")
+async def queue_publish(request: Request, x_admin_token: str | None = Header(default=None)):
+    require_admin(x_admin_token)
+    x=await request.json()
+    content_id=int(x["content_id"])
+    with db() as c:
+        row=c.execute("select * from content where id=%s",(content_id,)).fetchone()
+        if not row: raise HTTPException(404,"Материал не найден")
+        return c.execute("""insert into publish_queue(content_id,scheduled_at,status)
+          values(%s,%s,'queued') returning *""",(content_id,x.get("scheduled_at"))).fetchone()
+
+@app.get("/api/publish-queue")
+def publish_queue():
+    with db() as c:
+        return c.execute("""select q.*, c.title, c.platform, c.status content_status
+          from publish_queue q join content c on c.id=q.content_id
+          order by q.id desc""").fetchall()
+
+@app.post("/api/publish-queue/{queue_id}/published")
+async def mark_published(queue_id:int, request: Request, x_admin_token: str | None = Header(default=None)):
+    require_admin(x_admin_token)
+    x=await request.json()
+    with db() as c:
+        row=c.execute("""update publish_queue set status='published', rutube_url=%s,
+          published_at=coalesce(%s,current_timestamp) where id=%s returning *""",
+          (x.get("rutube_url"),x.get("published_at"),queue_id)).fetchone()
+        if not row: raise HTTPException(404,"Элемент очереди не найден")
+        c.execute("update content set status='published' where id=%s",(row["content_id"],))
+        return row
+
+@app.post("/api/revenue")
+async def add_revenue(request: Request, x_admin_token: str | None = Header(default=None)):
+    require_admin(x_admin_token)
+    x=await request.json()
+    with db() as c:
+        return c.execute("""insert into revenue_events(offer_id,content_id,subid,event_type,amount,status,event_at)
+          values(%s,%s,%s,%s,%s,%s,coalesce(%s,current_timestamp)) returning *""",
+          (x.get("offer_id"),x.get("content_id"),x.get("subid"),x.get("event_type","sale"),
+           x.get("amount") or 0,x.get("status","approved"),x.get("event_at"))).fetchone()
+
+@app.get("/api/revenue")
+def revenue():
+    with db() as c:
+        return c.execute("""select r.*, o.name offer_name, c.title
+          from revenue_events r left join offers o on o.id=r.offer_id
+          left join content c on c.id=r.content_id order by r.id desc""").fetchall()
 
 @app.get("/api/stats")
 def stats():

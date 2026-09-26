@@ -1,4 +1,4 @@
-import os, re, sqlite3
+import os, re, sqlite3, json, urllib.request, urllib.parse
 from urllib.parse import urlencode, urlparse, parse_qsl, urlunparse
 from fastapi import FastAPI, Request, HTTPException, Header
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -99,6 +99,27 @@ def init():
             )""")
         c.execute("create index if not exists idx_queue_status on publish_queue(status)")
         c.execute("create index if not exists idx_revenue_offer on revenue_events(offer_id)")
+        if using_sqlite():
+            for stmt in [
+                "alter table offers add column source text",
+                "alter table offers add column external_id text",
+                "alter table offers add column rating real default 0",
+                "alter table offers add column epc real default 0",
+                "alter table offers add column cr real default 0",
+                "alter table offers add column cpa_rate text",
+                "alter table offers add column site_url text"
+            ]:
+                try: c.execute(stmt)
+                except Exception: pass
+        else:
+            c.execute("alter table offers add column if not exists source text")
+            c.execute("alter table offers add column if not exists external_id text")
+            c.execute("alter table offers add column if not exists rating numeric default 0")
+            c.execute("alter table offers add column if not exists epc numeric default 0")
+            c.execute("alter table offers add column if not exists cr numeric default 0")
+            c.execute("alter table offers add column if not exists cpa_rate text")
+            c.execute("alter table offers add column if not exists site_url text")
+        c.execute("create unique index if not exists uq_offers_source_external on offers(source,external_id) where external_id is not null")
 
 @app.on_event("startup")
 def startup():
@@ -138,15 +159,63 @@ def offers():
           from offers o left join click_events e on e.offer_id=o.id
           group by o.id order by o.id desc""").fetchall()
 
+def _admitad_get(url: str, token: str):
+    req=urllib.request.Request(url, headers={"Authorization":f"Bearer {token}","Accept":"application/json","User-Agent":"CPAFactory/1.0"})
+    with urllib.request.urlopen(req, timeout=25) as r:
+        return json.loads(r.read().decode("utf-8"))
+
+def _first_rate(v):
+    if v is None: return ""
+    if isinstance(v,(int,float)): return str(v)
+    if isinstance(v,dict):
+        for x in v.values():
+            z=_first_rate(x)
+            if z: return z
+    if isinstance(v,list):
+        for x in v:
+            z=_first_rate(x)
+            if z: return z
+    m=re.search(r"(\d+(?:[.,]\d+)?)\s*%?",str(v))
+    return m.group(1).replace(",",".") if m else str(v)[:120]
+
 @app.get("/api/cpa/import")
-def cpa_import():
-    """Import offers from an Admitad-style JSON feed configured in CPA_FEED_URL.
-    No credentials are hard-coded; the endpoint is inert until a feed URL/token is configured.
-    """
-    feed=os.getenv("CPA_FEED_URL","").strip()
-    if not feed:
-        return {"status":"not_configured","message":"CPA_FEED_URL не настроен"}
-    return {"status":"ready","message":"Источник CPA настроен; импорт можно запускать после добавления токена."}
+def cpa_import(x_admin_token: str | None = Header(default=None)):
+    require_admin(x_admin_token)
+    token=os.getenv("ADMITAD_ACCESS_TOKEN","").strip()
+    website=os.getenv("ADMITAD_WEBSITE_ID","").strip()
+    if not token or not website:
+        return {"status":"not_configured","message":"Нужны ADMITAD_ACCESS_TOKEN и ADMITAD_WEBSITE_ID"}
+    url=f"https://api.admitad.com/advcampaigns/website/{urllib.parse.quote(website,safe='')}/?limit=100&connection_status=active&language=ru"
+    try:
+        data=_admitad_get(url,token)
+    except Exception as e:
+        raise HTTPException(502,f"Admitad API: {e}")
+    items=data.get("results",[]) if isinstance(data,dict) else data
+    added=updated=skipped=0
+    with db() as c:
+        for v in items:
+            if str(v.get("connection_status","active"))!="active": continue
+            cid=v.get("id"); name=v.get("name"); gotolink=v.get("gotolink")
+            if not cid or not name or not gotolink:
+                skipped+=1; continue
+            rules=json.dumps({"regions":v.get("regions") or [],"traffics":v.get("traffics") or [],"moderation":v.get("moderation"),"action_countries":v.get("action_countries")},ensure_ascii=False)
+            rating=float(v.get("rating") or 0); epc=float(v.get("epc") or 0); cr=float(v.get("cr") or 0)
+            rate=_first_rate(v.get("action_ranges"))
+            existing=c.execute("select id from offers where source='admitad' and external_id=%s",(str(cid),)).fetchone()
+            if existing:
+                c.execute("""update offers set name=%s,merchant=%s,tracking_url=%s,traffic_rules=%s,rating=%s,epc=%s,cr=%s,cpa_rate=%s,site_url=%s,active=true where id=%s""",
+                    (name,"Admitad",gotolink,rules,rating,epc,cr,rate,v.get("site_url"),existing["id"]))
+                updated+=1
+            else:
+                c.execute("""insert into offers(name,merchant,price,commission,tracking_url,traffic_rules,active,source,external_id,rating,epc,cr,cpa_rate,site_url)
+                    values(%s,%s,0,0,%s,%s,true,'admitad',%s,%s,%s,%s,%s,%s)""",
+                    (name,"Admitad",gotolink,rules,str(cid),rating,epc,cr,rate,v.get("site_url")))
+                added+=1
+    return {"status":"ok","source":"admitad","received":len(items),"added":added,"updated":updated,"skipped":skipped}
+
+@app.get("/api/cpa/status")
+def cpa_status():
+    return {"admitad_configured":bool(os.getenv("ADMITAD_ACCESS_TOKEN") and os.getenv("ADMITAD_WEBSITE_ID"))}
 
 @app.post("/api/offers")
 async def add_offer(request: Request, x_admin_token: str | None = Header(default=None)):

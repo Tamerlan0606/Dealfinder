@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: cpafactory-web
+    runtime: python
+    plan: free
+    region: frankfurt
+    repo: https://github.com/Tamerlan0606/Dealfinder
+    branch: main
+    buildCommand: cd cpafactory && pip install -r requirements.txt
+    startCommand: cd cpafactory && uvicorn app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: cpafactory-db
+          property: connectionString
+
+databases:
+  - name: cpafactory-db
+    plan: free
+    region: frankfurt

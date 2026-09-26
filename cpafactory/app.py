@@ -1,7 +1,7 @@
-import os, re, sqlite3, json, urllib.request, urllib.parse
+import os, re, sqlite3, json, urllib.request, urllib.parse, tempfile, subprocess, shutil, textwrap, zipfile, io, html
 from urllib.parse import urlencode, urlparse, parse_qsl, urlunparse
 from fastapi import FastAPI, Request, HTTPException, Header
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse, StreamingResponse
 import psycopg
 from psycopg.rows import dict_row
 
@@ -385,6 +385,76 @@ async def import_offers(request: Request, x_admin_token: str | None = Header(def
             added += 1
     return {"added":added}
 
+def _video_text(s):
+    s=re.sub(r'\\s+',' ',str(s or '')).strip()
+    return s
+
+def _wrap_lines(text, width=30):
+    words=_video_text(text).split()
+    lines=[]; cur=''
+    for w in words:
+        if len(cur)+len(w)+(1 if cur else 0)<=width: cur=(cur+' '+w).strip()
+        else:
+            if cur: lines.append(cur)
+            cur=w
+    if cur: lines.append(cur)
+    return lines
+
+def _make_mp4(content_id, row, offer):
+    ffmpeg=shutil.which('ffmpeg')
+    if not ffmpeg:
+        raise HTTPException(503,'На сервере не найден ffmpeg; MP4 пока недоступен')
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except Exception:
+        raise HTTPException(503,'Не установлен Pillow')
+    tmp=tempfile.mkdtemp(prefix='cfvideo_')
+    try:
+        scenes=json.loads(row['scenes'] or '[]') if row['scenes'] else []
+        if not scenes:
+            pack=build_content_pack(row,offer); scenes=pack['scenes']
+        font_paths=['/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf','/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf']
+        font_path=next((p for p in font_paths if os.path.exists(p)),None)
+        if not font_path: raise HTTPException(503,'Шрифт для MP4 не найден')
+        font=ImageFont.truetype(font_path,58); small=ImageFont.truetype(font_path,34)
+        files=[]
+        for i,sc in enumerate(scenes):
+            im=Image.new('RGB',(1080,1920),'white'); d=ImageDraw.Draw(im)
+            d.text((70,150), 'CPA FACTORY', font=small, fill='black')
+            lines=_wrap_lines(sc.get('text',''),28)
+            y=520
+            for line in lines:
+                bbox=d.textbbox((0,0),line,font=font); w=bbox[2]-bbox[0]
+                d.text(((1080-w)/2,y),line,font=font,fill='black'); y+=82
+            d.text((70,1760),f"Сцена {i+1}/{len(scenes)}",font=small,fill='black')
+            path=os.path.join(tmp,f'{i:03d}.png'); im.save(path); files.append(path)
+        concat=os.path.join(tmp,'concat.txt')
+        with open(concat,'w',encoding='utf-8') as f:
+            for p,sc in zip(files,scenes):
+                dur=5
+                m=re.search(r'(\\d+):(\\d+)-(\\d+):(\\d+)',str(sc.get('time','')))
+                if m:
+                    dur=max(2,(int(m.group(3))*60+int(m.group(4)))-(int(m.group(1))*60+int(m.group(2))))
+                f.write(f"file '{p}'\\nduration {dur}\\n")
+            f.write(f"file '{files[-1]}'\\n")
+        out=os.path.join(tmp,f'content_{content_id}.mp4')
+        subprocess.run([ffmpeg,'-y','-f','concat','-safe','0','-i',concat,'-vf','scale=1080:1920,format=yuv420p','-r','30','-movflags','+faststart',out],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=90)
+        return out,tmp
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(500,'Ошибка сборки MP4: '+e.stderr.decode('utf-8','ignore')[-500:])
+
+def _make_pack_zip(content_id,row,offer):
+    mp4,tmp=_make_mp4(content_id,row,offer)
+    pack=build_content_pack(row,offer)
+    z=io.BytesIO()
+    with zipfile.ZipFile(z,'w',zipfile.ZIP_DEFLATED) as zz:
+        zz.write(mp4,arcname=f'content_{content_id}.mp4')
+        zz.writestr('description.txt',pack['description'])
+        zz.writestr('voice_script.txt',pack['voice_script'])
+        zz.writestr('scenes.json',json.dumps(pack['scenes'],ensure_ascii=False,indent=2))
+        zz.writestr('thumbnail_prompt.txt',pack['thumbnail_prompt'])
+    shutil.rmtree(tmp,ignore_errors=True); z.seek(0); return z
+
 def build_content_pack(row, offer):
     name = offer["name"] or "товар"
     price = offer["price"] or 0
@@ -409,6 +479,26 @@ def build_content_pack(row, offer):
     return {"content_id":int(row["id"]),"offer_id":int(offer["id"]),"title":row["title"],"hook":hook,
             "description":description,"cta":cta,"tracking_link":link,"scenes":scenes,
             "thumbnail_prompt":thumb,"voice_script":row["script"],"platform":row["platform"]}
+
+@app.get("/api/content/{content_id}/mp4")
+def content_mp4(content_id:int):
+    with db() as c:
+        row=c.execute("select * from content where id=%s",(content_id,)).fetchone()
+        if not row: raise HTTPException(404,"Материал не найден")
+        offer=c.execute("select * from offers where id=%s",(row["offer_id"],)).fetchone()
+        if not offer: raise HTTPException(404,"Оффер не найден")
+    path,tmp=_make_mp4(content_id,row,offer)
+    return FileResponse(path,media_type="video/mp4",filename=f"rutube_content_{content_id}.mp4",background=None)
+
+@app.get("/api/content/{content_id}/zip")
+def content_zip(content_id:int):
+    with db() as c:
+        row=c.execute("select * from content where id=%s",(content_id,)).fetchone()
+        if not row: raise HTTPException(404,"Материал не найден")
+        offer=c.execute("select * from offers where id=%s",(row["offer_id"],)).fetchone()
+        if not offer: raise HTTPException(404,"Оффер не найден")
+    z=_make_pack_zip(content_id,row,offer)
+    return StreamingResponse(z,media_type="application/zip",headers={"Content-Disposition":f'attachment; filename="rutube_pack_{content_id}.zip"'})
 
 @app.get("/api/content/{content_id}/pack")
 def content_pack(content_id:int):

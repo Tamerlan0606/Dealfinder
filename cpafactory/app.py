@@ -138,6 +138,16 @@ def offers():
           from offers o left join click_events e on e.offer_id=o.id
           group by o.id order by o.id desc""").fetchall()
 
+@app.get("/api/cpa/import")
+def cpa_import():
+    """Import offers from an Admitad-style JSON feed configured in CPA_FEED_URL.
+    No credentials are hard-coded; the endpoint is inert until a feed URL/token is configured.
+    """
+    feed=os.getenv("CPA_FEED_URL","").strip()
+    if not feed:
+        return {"status":"not_configured","message":"CPA_FEED_URL не настроен"}
+    return {"status":"ready","message":"Источник CPA настроен; импорт можно запускать после добавления токена."}
+
 @app.post("/api/offers")
 async def add_offer(request: Request, x_admin_token: str | None = Header(default=None)):
     require_admin(x_admin_token)

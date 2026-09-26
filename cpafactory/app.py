@@ -19,23 +19,38 @@ def db():
 
 def init():
     with db() as c:
-        c.execute("""
-        create table if not exists offers(
-          id serial primary key, name text not null, merchant text, price numeric,
-          commission numeric, tracking_url text, traffic_rules text,
-          active boolean default true, created_at timestamptz default now()
-        );
-        create table if not exists content(
-          id serial primary key, offer_id int references offers(id), title text,
-          script text, platform text default 'rutube', status text default 'draft',
-          views bigint default 0, clicks bigint default 0, conversions bigint default 0,
-          approved_commission numeric default 0, created_at timestamptz default now()
-        );
-        create table if not exists click_events(
-          id bigserial primary key, offer_id int references offers(id),
-          content_id int references content(id), subid text, created_at timestamptz default now()
-        );
-        """)
+        if using_sqlite():
+            c.execute("""create table if not exists offers(
+              id integer primary key autoincrement, name text not null, merchant text, price real,
+              commission real, tracking_url text, traffic_rules text,
+              active integer default 1, created_at text default CURRENT_TIMESTAMP
+            )""")
+            c.execute("""create table if not exists content(
+              id integer primary key autoincrement, offer_id integer references offers(id), title text,
+              script text, platform text default 'rutube', status text default 'draft',
+              views integer default 0, clicks integer default 0, conversions integer default 0,
+              approved_commission real default 0, created_at text default CURRENT_TIMESTAMP
+            )""")
+            c.execute("""create table if not exists click_events(
+              id integer primary key autoincrement, offer_id integer references offers(id),
+              content_id integer references content(id), subid text, created_at text default CURRENT_TIMESTAMP
+            )""")
+        else:
+            c.execute("""create table if not exists offers(
+              id serial primary key, name text not null, merchant text, price numeric,
+              commission numeric, tracking_url text, traffic_rules text,
+              active boolean default true, created_at timestamptz default now()
+            )""")
+            c.execute("""create table if not exists content(
+              id serial primary key, offer_id int references offers(id), title text,
+              script text, platform text default 'rutube', status text default 'draft',
+              views bigint default 0, clicks bigint default 0, conversions bigint default 0,
+              approved_commission numeric default 0, created_at timestamptz default now()
+            )""")
+            c.execute("""create table if not exists click_events(
+              id bigserial primary key, offer_id int references offers(id),
+              content_id int references content(id), subid text, created_at timestamptz default now()
+            )""")
         c.execute("create index if not exists idx_click_offer on click_events(offer_id)")
         c.execute("create index if not exists idx_click_content on click_events(content_id)")
 

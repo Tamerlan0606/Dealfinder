@@ -306,9 +306,10 @@ def _pipeline_run():
         offer_id = int(o["id"])
         name = o["name"]
         price = o["price"] or 0
+        price_label = f"{price:g} ₽" if price else "цена уточняется"
         cpa_rate = o["cpa_rate"] or ""
         rate_text = f"{cpa_rate}%" if cpa_rate and "%" not in str(cpa_rate) else str(cpa_rate)
-        title = f"{name}: стоит ли покупать? Цена {price:g} ₽"
+        title = f"{name}: стоит ли покупать? Цена {price_label}"
         # Avoid generating the same offer repeatedly within 24 hours.
         with db() as c:
             if using_sqlite():
@@ -321,7 +322,7 @@ def _pipeline_run():
                 msg = f"Для оффера уже есть свежий материал: #{recent['id']}"
                 c.execute("insert into pipeline_runs(status,offer_id,message) values(%s,%s,%s)",("skipped",offer_id,msg))
                 return {"status":"skipped","offer_id":offer_id,"content_id":recent["id"],"message":msg}
-            script=(f"Сегодня разбираем товар «{name}». Цена — {price:g} ₽. "
+            script=(f"Сегодня разбираем товар «{name}». Цена — {price_label}. "
                     f"Смотрим характеристики, кому он подходит и на что обратить внимание перед покупкой. "
                     f"Ссылка на актуальную цену — в описании. "
                     f"Партнёрская ставка по программе: {rate_text or 'уточняется'}.")
@@ -475,7 +476,7 @@ def build_content_pack(row, offer):
     cta = f"Полная информация и актуальная цена — по ссылке в описании: {link}"
     scenes = [
         {"time":"00:00-00:05","text":hook},
-        {"time":"00:05-00:15","text":f"Что это: {name}. Цена: {price:g} ₽."},
+        {"time":"00:05-00:15","text":f"Что это: {name}. Цена: {price_label}."},
         {"time":"00:15-00:30","text":"Показываем ключевые характеристики и кому этот вариант подходит."},
         {"time":"00:30-00:45","text":"Проверяем важные ограничения, условия покупки и на что смотреть перед заказом."},
         {"time":"00:45-00:55","text":cta},
@@ -541,7 +542,7 @@ async def generate_content(request: Request, x_admin_token: str | None = Header(
         name=o["name"]; price=o["price"] or 0; commission=o["commission"] or 0
         cpa_rate=o["cpa_rate"] or ""
         rate_text=f"{cpa_rate}%" if cpa_rate and "%" not in str(cpa_rate) else str(cpa_rate)
-        title=f"{name}: стоит ли покупать? Цена {price:g} ₽"
+        title=f"{name}: стоит ли покупать? Цена {price_label}"
         script=(f"Сегодня разбираем товар «{name}». Цена — {price:g} ₽. "
                 f"Смотрим характеристики, кому он подходит и на что обратить внимание перед покупкой. "
                 f"Ссылка на актуальную цену — в описании. Переход по ссылке помогает отследить предложение. "
@@ -672,7 +673,7 @@ async function load(){
  offers.innerHTML=o.length?'<table><tr><th>Товар</th><th>Сеть</th><th>Цена</th><th>Комиссия</th><th>Переходы</th></tr>'+
  o.map(x=>'<tr><td>'+esc(x.name)+'</td><td>'+esc(x.merchant)+'</td><td>'+Number(x.price||0).toLocaleString('ru-RU')+'</td><td>'+Number(x.commission||0).toLocaleString('ru-RU')+' ₽</td><td>'+x.clicks+'</td></tr>').join('')+'</table>':'Пока нет офферов';
  content.innerHTML=c.length?'<table><tr><th>Оффер</th><th>Площадка</th><th>Статус</th><th>Переходы</th><th>Ссылки</th></tr>'+
- c.map(x=>'<tr><td>'+esc(x.offer_name)+'</td><td>'+esc(x.platform)+'</td><td>'+esc(x.status)+'</td><td>'+x.clicks+'</td><td><a href="/go/'+x.offer_id+'?content_id='+x.id+'" target="_blank">тест</a> · <a href="/api/content/'+x.id+'/pack" target="_blank">пакет</a></td></tr>').join('')+'</table>':'Пока нет материалов';
+ c.map(x=>'<tr><td>'+esc(x.offer_name)+'</td><td>'+esc(x.platform)+'</td><td>'+esc(x.status)+'</td><td>'+x.clicks+'</td><td><a href="/go/'+x.offer_id+'?content_id='+x.id+'" target="_blank">тест</a> · <a href="/api/content/'+x.id+'/pack" target="_blank">пакет</a> · <a href="/api/content/'+x.id+'/mp4" target="_blank">MP4</a> · <a href="/api/content/'+x.id+'/zip" target="_blank">ZIP</a></td></tr>').join('')+'</table>':'Пока нет материалов';
  let q=await (await fetch('/api/publish-queue')).json();
  queue.innerHTML=q.length?'<table><tr><th>Материал</th><th>Дата</th><th>Статус</th><th>RUTUBE</th></tr>'+
  q.map(x=>'<tr><td>'+esc(x.title)+'</td><td>'+esc(x.scheduled_at||'—')+'</td><td>'+esc(x.status)+'</td><td>'+(x.rutube_url?'<a href="'+esc(x.rutube_url)+'" target="_blank">открыть</a>':'—')+'</td></tr>').join('')+'</table>':'Очередь пуста';

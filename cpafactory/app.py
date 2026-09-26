@@ -187,6 +187,18 @@ def _admitad_get(url: str, token: str):
     with urllib.request.urlopen(req, timeout=25) as r:
         return json.loads(r.read().decode("utf-8"))
 
+def _gdeslon_get(url: str, wm_id: str, token: str):
+    import base64
+    raw=f"{wm_id}:{token}".encode()
+    headers={"Authorization":f"Basic {base64.b64encode(raw).decode()}","Accept":"application/json","User-Agent":"CPAFactory/1.0"}
+    req=urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=25) as r:
+        raw=r.read().decode("utf-8")
+        try:
+            return json.loads(raw)
+        except Exception:
+            return raw
+
 def _first_rate(v):
     if v is None: return ""
     if isinstance(v,(int,float)): return str(v)
@@ -236,9 +248,48 @@ def cpa_import(x_admin_token: str | None = Header(default=None)):
                 added+=1
     return {"status":"ok","source":"admitad","received":len(items),"added":added,"updated":updated,"skipped":skipped}
 
+@app.get("/api/cpa/import/gdeslon")
+def cpa_import_gdeslon(x_admin_token: str | None = Header(default=None)):
+    require_admin(x_admin_token)
+    wm_id=os.getenv("GDESLON_WM_ID","").strip()
+    token=os.getenv("GDESLON_API_TOKEN","").strip()
+    base=os.getenv("GDESLON_API_BASE","https://api.gdeslon.ru/api").rstrip("/")
+    if not wm_id or not token:
+        return {"status":"not_configured","message":"Нужны GDESLON_WM_ID и GDESLON_API_TOKEN"}
+    url=f"{base}/search.json?q={urllib.parse.quote(os.getenv('GDESLON_QUERY','') or '')}"
+    try:
+        data=_gdeslon_get(url,wm_id,token)
+    except Exception as e:
+        raise HTTPException(502,f"GdeSlon API: {e}")
+    items=data.get("offers",[]) if isinstance(data,dict) else []
+    added=updated=skipped=0
+    with db() as c:
+        for v in items:
+            oid=v.get("id") or v.get("offer_id")
+            name=v.get("name") or v.get("title")
+            link=v.get("url") or v.get("link")
+            if not oid or not name or not link:
+                skipped+=1; continue
+            rules=json.dumps({"source":"gdeslon","raw":v},ensure_ascii=False)[:12000]
+            commission=v.get("commission") or v.get("rate") or 0
+            existing=c.execute("select id from offers where source='gdeslon' and external_id=%s",(str(oid),)).fetchone()
+            if existing:
+                c.execute("""update offers set name=%s,merchant=%s,tracking_url=%s,traffic_rules=%s,commission=%s,active=true where id=%s""",
+                          (name,"Где Слон?",link,rules,commission,existing["id"]))
+                updated+=1
+            else:
+                c.execute("""insert into offers(name,merchant,price,commission,tracking_url,traffic_rules,active,source,external_id,rating,epc,cr,cpa_rate,site_url)
+                    values(%s,%s,0,%s,%s,%s,true,'gdeslon',%s,0,0,0,%s,%s)""",
+                    (name,"Где Слон?",commission,link,rules,str(oid),str(commission),v.get("url")))
+                added+=1
+    return {"status":"ok","source":"gdeslon","received":len(items),"added":added,"updated":updated,"skipped":skipped}
+
 @app.get("/api/cpa/status")
 def cpa_status():
-    return {"admitad_configured":bool(os.getenv("ADMITAD_ACCESS_TOKEN") and os.getenv("ADMITAD_WEBSITE_ID"))}
+    return {
+        "admitad_configured":bool(os.getenv("ADMITAD_ACCESS_TOKEN") and os.getenv("ADMITAD_WEBSITE_ID")),
+        "gdeslon_configured":bool(os.getenv("GDESLON_WM_ID") and os.getenv("GDESLON_API_TOKEN"))
+    }
 
 @app.get("/api/cpa/top")
 def cpa_top(limit: int = 10):
@@ -262,6 +313,13 @@ def cpa_top(limit: int = 10):
     out.sort(key=lambda x:(x["score"],float(x.get("epc") or 0),float(x.get("cr") or 0)),reverse=True)
     return out[:limit]
 
+@app.get("/api/cpa/cron-import-gdeslon")
+def cpa_cron_import_gdeslon(x_cron_token: str | None = Header(default=None)):
+    expected=os.getenv("CPA_CRON_TOKEN","").strip()
+    if not expected or x_cron_token != expected:
+        raise HTTPException(401,"Недействительный cron-токен")
+    return cpa_import_gdeslon(ADMIN_TOKEN)
+
 @app.get("/api/cpa/cron-import")
 def cpa_cron_import(x_cron_token: str | None = Header(default=None)):
     expected=os.getenv("CPA_CRON_TOKEN","").strip()
@@ -283,6 +341,7 @@ def pipeline_status():
     top = cpa_top(1)
     return {
         "admitad_configured": bool(os.getenv("ADMITAD_ACCESS_TOKEN") and os.getenv("ADMITAD_WEBSITE_ID")),
+        "gdeslon_configured": bool(os.getenv("GDESLON_WM_ID") and os.getenv("GDESLON_API_TOKEN")),
         "active_offers": active, "queued": queued,
         "top_offer": dict(top[0]) if top else None,
         "last_run": dict(last) if last else None
@@ -290,9 +349,17 @@ def pipeline_status():
 
 def _pipeline_run():
     try:
-        imported = cpa_import(ADMIN_TOKEN)
+        try:
+            imported = cpa_import(ADMIN_TOKEN)
+        except Exception:
+            imported = {"status":"error"}
+        if imported.get("status") == "not_configured" or imported.get("status") == "error":
+            try:
+                imported = cpa_import_gdeslon(ADMIN_TOKEN)
+            except Exception:
+                imported = {"status":"error"}
         if imported.get("status") == "not_configured":
-            msg = imported.get("message", "Admitad не подключён")
+            msg = "Не подключена CPA-сеть: Admitad или Где Слон?"
             with db() as c:
                 c.execute("insert into pipeline_runs(status,message) values(%s,%s)", ("not_configured", msg))
             return {"status":"not_configured","message":msg}
@@ -465,6 +532,7 @@ def _make_pack_zip(content_id,row,offer):
 def build_content_pack(row, offer):
     name = offer["name"] or "товар"
     price = offer["price"] or 0
+    price_label = f"{price:g} ₽" if price else "цена уточняется"
     rate = offer["cpa_rate"] or ""
     rate_text = f"{rate}%" if rate and "%" not in str(rate) else str(rate)
     link = f"/go/{offer['id']}?content_id={row['id']}"
@@ -540,6 +608,7 @@ async def generate_content(request: Request, x_admin_token: str | None = Header(
         o=c.execute("select * from offers where id=%s", (offer_id,)).fetchone()
         if not o: raise HTTPException(404, "Оффер не найден")
         name=o["name"]; price=o["price"] or 0; commission=o["commission"] or 0
+        price_label=f"{price:g} ₽" if price else "цена уточняется"
         cpa_rate=o["cpa_rate"] or ""
         rate_text=f"{cpa_rate}%" if cpa_rate and "%" not in str(cpa_rate) else str(cpa_rate)
         title=f"{name}: стоит ли покупать? Цена {price_label}"

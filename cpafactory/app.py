@@ -263,6 +263,8 @@ def stats():
               (select coalesce(sum(clicks),0) from content) clicks,
               (select coalesce(sum(conversions),0) from content) conversions,
               (select coalesce(sum(approved_commission),0) from content) commission,
+              (select coalesce(sum(amount),0) from revenue_events where status='approved') revenue,
+              (select count(*) from publish_queue where status='queued') queued,
               (select count(*) from click_events where created_at > datetime('now','-24 hours')) clicks24""").fetchone()
         return c.execute("""select
           (select count(*) from offers where active) offers,
@@ -270,6 +272,8 @@ def stats():
           (select coalesce(sum(clicks),0) from content) clicks,
           (select coalesce(sum(conversions),0) from content) conversions,
           (select coalesce(sum(approved_commission),0) from content) commission,
+          (select coalesce(sum(amount),0) from revenue_events where status='approved') revenue,
+          (select count(*) from publish_queue where status='queued') queued,
           (select count(*) from click_events where created_at > now()-interval '24 hours') clicks24""").fetchone()
 
 PAGE=r"""<!doctype html>

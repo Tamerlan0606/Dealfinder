@@ -403,7 +403,13 @@ def _wrap_lines(text, width=30):
 def _make_mp4(content_id, row, offer):
     ffmpeg=shutil.which('ffmpeg')
     if not ffmpeg:
-        raise HTTPException(503,'На сервере не найден ffmpeg; MP4 пока недоступен')
+        try:
+            import imageio_ffmpeg
+            ffmpeg=imageio_ffmpeg.get_ffmpeg_exe()
+        except Exception:
+            ffmpeg=None
+    if not ffmpeg:
+        raise HTTPException(503,'Не удалось получить ffmpeg; MP4 пока недоступен')
     try:
         from PIL import Image, ImageDraw, ImageFont
     except Exception:

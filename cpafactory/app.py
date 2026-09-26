@@ -120,7 +120,12 @@ def init():
                 "alter table offers add column epc real default 0",
                 "alter table offers add column cr real default 0",
                 "alter table offers add column cpa_rate text",
-                "alter table offers add column site_url text"
+                "alter table offers add column site_url text",
+                "alter table content add column description text",
+                "alter table content add column hook text",
+                "alter table content add column cta text",
+                "alter table content add column scenes text",
+                "alter table content add column thumbnail_prompt text"
             ]:
                 try: c.execute(stmt)
                 except Exception: pass
@@ -132,6 +137,11 @@ def init():
             c.execute("alter table offers add column if not exists cr numeric default 0")
             c.execute("alter table offers add column if not exists cpa_rate text")
             c.execute("alter table offers add column if not exists site_url text")
+            c.execute("alter table content add column if not exists description text")
+            c.execute("alter table content add column if not exists hook text")
+            c.execute("alter table content add column if not exists cta text")
+            c.execute("alter table content add column if not exists scenes text")
+            c.execute("alter table content add column if not exists thumbnail_prompt text")
         c.execute("create unique index if not exists uq_offers_source_external on offers(source,external_id) where external_id is not null")
 
 @app.on_event("startup")
@@ -375,6 +385,40 @@ async def import_offers(request: Request, x_admin_token: str | None = Header(def
             added += 1
     return {"added":added}
 
+def build_content_pack(row, offer):
+    name = offer["name"] or "товар"
+    price = offer["price"] or 0
+    rate = offer["cpa_rate"] or ""
+    rate_text = f"{rate}%" if rate and "%" not in str(rate) else str(rate)
+    link = f"/go/{offer['id']}?content_id={row['id']}"
+    hook = f"СТОП. Перед покупкой «{name}» проверьте эти 3 вещи."
+    description = (f"Разбираем «{name}»: цена, ключевые характеристики, кому подходит и что проверить перед покупкой.\\n\\n"
+                   f"🔗 Актуальная цена и предложение: {link}\\n\\n"
+                   f"Партнёрская ставка: {rate_text or 'уточняется'}.\\n"
+                   f"Информация об оффере может изменяться продавцом.")
+    cta = f"Полная информация и актуальная цена — по ссылке в описании: {link}"
+    scenes = [
+        {"time":"00:00-00:05","text":hook},
+        {"time":"00:05-00:15","text":f"Что это: {name}. Цена: {price:g} ₽."},
+        {"time":"00:15-00:30","text":"Показываем ключевые характеристики и кому этот вариант подходит."},
+        {"time":"00:30-00:45","text":"Проверяем важные ограничения, условия покупки и на что смотреть перед заказом."},
+        {"time":"00:45-00:55","text":cta},
+        {"time":"00:55-01:00","text":"Сохраняйте ролик и проверяйте цену перед покупкой."}
+    ]
+    thumb = f"Вертикальная обложка 9:16 для RUTUBE: крупный текст «{name} — стоит ли покупать?», визуально показать товар/категорию, высокий контраст, чистый фон, без логотипов и мелкого текста."
+    return {"content_id":int(row["id"]),"offer_id":int(offer["id"]),"title":row["title"],"hook":hook,
+            "description":description,"cta":cta,"tracking_link":link,"scenes":scenes,
+            "thumbnail_prompt":thumb,"voice_script":row["script"],"platform":row["platform"]}
+
+@app.get("/api/content/{content_id}/pack")
+def content_pack(content_id:int):
+    with db() as c:
+        row=c.execute("select * from content where id=%s",(content_id,)).fetchone()
+        if not row: raise HTTPException(404,"Материал не найден")
+        offer=c.execute("select * from offers where id=%s",(row["offer_id"],)).fetchone()
+        if not offer: raise HTTPException(404,"Оффер не найден")
+    return build_content_pack(row,offer)
+
 @app.get("/api/content")
 def content():
     with db() as c:
@@ -531,8 +575,8 @@ async function load(){
  offerSelect.innerHTML=o.map(x=>'<option value="'+x.id+'">'+esc(x.name)+'</option>').join('');
  offers.innerHTML=o.length?'<table><tr><th>Товар</th><th>Сеть</th><th>Цена</th><th>Комиссия</th><th>Переходы</th></tr>'+
  o.map(x=>'<tr><td>'+esc(x.name)+'</td><td>'+esc(x.merchant)+'</td><td>'+Number(x.price||0).toLocaleString('ru-RU')+'</td><td>'+Number(x.commission||0).toLocaleString('ru-RU')+' ₽</td><td>'+x.clicks+'</td></tr>').join('')+'</table>':'Пока нет офферов';
- content.innerHTML=c.length?'<table><tr><th>Оффер</th><th>Площадка</th><th>Статус</th><th>Переходы</th><th>Ссылка</th></tr>'+
- c.map(x=>'<tr><td>'+esc(x.offer_name)+'</td><td>'+esc(x.platform)+'</td><td>'+esc(x.status)+'</td><td>'+x.clicks+'</td><td><a href="/go/'+x.offer_id+'?content_id='+x.id+'" target="_blank">тест</a></td></tr>').join('')+'</table>':'Пока нет материалов';
+ content.innerHTML=c.length?'<table><tr><th>Оффер</th><th>Площадка</th><th>Статус</th><th>Переходы</th><th>Ссылки</th></tr>'+
+ c.map(x=>'<tr><td>'+esc(x.offer_name)+'</td><td>'+esc(x.platform)+'</td><td>'+esc(x.status)+'</td><td>'+x.clicks+'</td><td><a href="/go/'+x.offer_id+'?content_id='+x.id+'" target="_blank">тест</a> · <a href="/api/content/'+x.id+'/pack" target="_blank">пакет</a></td></tr>').join('')+'</table>':'Пока нет материалов';
  let q=await (await fetch('/api/publish-queue')).json();
  queue.innerHTML=q.length?'<table><tr><th>Материал</th><th>Дата</th><th>Статус</th><th>RUTUBE</th></tr>'+
  q.map(x=>'<tr><td>'+esc(x.title)+'</td><td>'+esc(x.scheduled_at||'—')+'</td><td>'+esc(x.status)+'</td><td>'+(x.rutube_url?'<a href="'+esc(x.rutube_url)+'" target="_blank">открыть</a>':'—')+'</td></tr>').join('')+'</table>':'Очередь пуста';

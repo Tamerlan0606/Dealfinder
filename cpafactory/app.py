@@ -1,11 +1,16 @@
 import os, re, sqlite3
 from urllib.parse import urlencode, urlparse, parse_qsl, urlunparse
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, Header
 from fastapi.responses import HTMLResponse, RedirectResponse
 import psycopg
 from psycopg.rows import dict_row
 
 app = FastAPI(title="CPA Factory")
+ADMIN_TOKEN = os.environ.get("CPA_ADMIN_TOKEN", "")
+
+def require_admin(x_admin_token: str | None):
+    if ADMIN_TOKEN and x_admin_token != ADMIN_TOKEN:
+        raise HTTPException(401, "Требуется токен администратора")
 
 class SQLiteConn:
     def __init__(self, path):
@@ -108,7 +113,7 @@ def offers():
           group by o.id order by o.id desc""").fetchall()
 
 @app.post("/api/offers")
-async def add_offer(request: Request):
+async def add_offer(request: Request, x_admin_token: str | None = Header(default=None)):\n    require_admin(x_admin_token)
     x=await request.json()
     if not x.get("name"): raise HTTPException(400, "name обязателен")
     with db() as c:
@@ -118,7 +123,7 @@ async def add_offer(request: Request):
            x.get("tracking_url"),x.get("traffic_rules"))).fetchone()
 
 @app.post("/api/offers/import")
-async def import_offers(request: Request):
+async def import_offers(request: Request, x_admin_token: str | None = Header(default=None)):\n    require_admin(x_admin_token)
     x=await request.json()
     items=x if isinstance(x,list) else x.get("offers",[])
     added=0
@@ -139,7 +144,7 @@ def content():
           from content left join offers on offers.id=content.offer_id order by content.id desc""").fetchall()
 
 @app.post("/api/content")
-async def add_content(request: Request):
+async def add_content(request: Request, x_admin_token: str | None = Header(default=None)):\n    require_admin(x_admin_token)
     x=await request.json()
     with db() as c:
         return c.execute("""insert into content(offer_id,title,script,platform,status)
@@ -147,7 +152,7 @@ async def add_content(request: Request):
           (x.get("offer_id"),x.get("title"),x.get("script"),x.get("platform","rutube"),x.get("status","draft"))).fetchone()
 
 @app.post("/api/content/generate")
-async def generate_content(request: Request):
+async def generate_content(request: Request, x_admin_token: str | None = Header(default=None)):\n    require_admin(x_admin_token)
     x=await request.json()
     offer_id=int(x["offer_id"])
     with db() as c:
@@ -164,7 +169,7 @@ async def generate_content(request: Request):
           (offer_id,title,script,x.get("platform","rutube"))).fetchone()
 
 @app.post("/api/content/{content_id}/publish-ready")
-def publish_ready(content_id:int):
+def publish_ready(content_id:int, x_admin_token: str | None = Header(default=None)):\n    require_admin(x_admin_token)
     with db() as c:
         row=c.execute("update content set status='ready' where id=%s returning *",(content_id,)).fetchone()
         if not row: raise HTTPException(404,"Материал не найден")
@@ -200,7 +205,7 @@ input,textarea,select{width:100%;box-sizing:border-box;padding:10px;border:1px s
 table{width:100%;border-collapse:collapse;font-size:14px}td,th{text-align:left;padding:8px;border-bottom:1px solid #eee}
 .small{font-size:12px}.ok{color:#16803c}@media(max-width:700px){.grid{grid-template-columns:repeat(2,1fr)}table{display:block;overflow:auto;white-space:nowrap}}
 </style></head><body><main>
-<div class="card"><h1>CPA Factory</h1><div class="muted">Оффер → трекинг → контент → очередь публикации → аналитика</div></div>
+<div class="card"><h1>CPA Factory</h1><div class="muted">Оффер → трекинг → контент → очередь публикации → аналитика</div><div class="small muted">Административные операции защищены токеном.</div></div>
 <div class="grid"><div class="card"><div class="muted">Активные офферы</div><div id="m1" class="metric">0</div></div>
 <div class="card"><div class="muted">Материалы</div><div id="m2" class="metric">0</div></div>
 <div class="card"><div class="muted">Переходы</div><div id="m3" class="metric">0</div></div>
@@ -226,12 +231,24 @@ async function load(){
  content.innerHTML=c.length?'<table><tr><th>Оффер</th><th>Площадка</th><th>Статус</th><th>Переходы</th><th>Ссылка</th></tr>'+
  c.map(x=>'<tr><td>'+esc(x.offer_name)+'</td><td>'+esc(x.platform)+'</td><td>'+esc(x.status)+'</td><td>'+x.clicks+'</td><td><a href="/go/'+x.offer_id+'?content_id='+x.id+'" target="_blank">тест</a></td></tr>').join('')+'</table>':'Пока нет материалов';
 }
+function adminToken(){
+ let t=localStorage.getItem('cf_admin_token')||'';
+ if(!t){t=prompt('Введите токен администратора CPA Factory'); if(t)localStorage.setItem('cf_admin_token',t);}
+ return t||'';
+}
+async function adminFetch(url,opts={}){
+ opts.headers=Object.assign({'Content-Type':'application/json','X-Admin-Token':adminToken()},opts.headers||{});
+ let r=await fetch(url,opts);
+ if(r.status===401){localStorage.removeItem('cf_admin_token'); alert('Неверный токен администратора.');}
+ return r;
+}
 async function addOffer(){
- await fetch('/api/offers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name.value,merchant:merchant.value,price:price.value,commission:commission.value,tracking_url:url.value,traffic_rules:rules.value})});
- ['name','merchant','price','commission','url','rules'].forEach(x=>document.getElementById(x).value='');load();
+ let r=await adminFetch('/api/offers',{method:'POST',body:JSON.stringify({name:name.value,merchant:merchant.value,price:price.value,commission:commission.value,tracking_url:url.value,traffic_rules:rules.value})});
+ if(r.ok){['name','merchant','price','commission','url','rules'].forEach(x=>document.getElementById(x).value='');load();}
 }
 async function generate(){
- let r=await fetch('/api/content/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({offer_id:offerSelect.value,platform:platform.value})});
+ let r=await adminFetch('/api/content/generate',{method:'POST',body:JSON.stringify({offer_id:offerSelect.value,platform:platform.value})});
+ if(!r.ok)return;
  let x=await r.json(); generated.innerHTML='<p><b>'+esc(x.title)+'</b></p><textarea rows="6" readonly>'+esc(x.script)+'</textarea><div class="ok">Материал создан со статусом draft.</div>';load();
 }
 load();

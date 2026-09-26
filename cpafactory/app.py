@@ -217,6 +217,35 @@ def cpa_import(x_admin_token: str | None = Header(default=None)):
 def cpa_status():
     return {"admitad_configured":bool(os.getenv("ADMITAD_ACCESS_TOKEN") and os.getenv("ADMITAD_WEBSITE_ID"))}
 
+@app.get("/api/cpa/top")
+def cpa_top(limit: int = 10):
+    limit=max(1,min(limit,50))
+    with db() as c:
+        rows=c.execute("""select o.*, count(e.id) clicks
+          from offers o left join click_events e on e.offer_id=o.id
+          where o.active=true
+          group by o.id""").fetchall()
+    out=[]
+    for r in rows:
+        epc=float(r["epc"] or 0)
+        cr=float(r["cr"] or 0)
+        rating=float(r["rating"] or 0)
+        score=(__import__("math").log1p(max(epc,0))*0.55
+               + min(max(cr,0),100)*0.30
+               + min(max(rating,0),5)*0.15)
+        x=dict(r)
+        x["score"]=round(score,4)
+        out.append(x)
+    out.sort(key=lambda x:(x["score"],float(x.get("epc") or 0),float(x.get("cr") or 0)),reverse=True)
+    return out[:limit]
+
+@app.get("/api/cpa/cron-import")
+def cpa_cron_import(x_cron_token: str | None = Header(default=None)):
+    expected=os.getenv("CPA_CRON_TOKEN","").strip()
+    if not expected or x_cron_token != expected:
+        raise HTTPException(401,"Недействительный cron-токен")
+    return cpa_import(ADMIN_TOKEN)
+
 @app.post("/api/offers")
 async def add_offer(request: Request, x_admin_token: str | None = Header(default=None)):
     require_admin(x_admin_token)
@@ -268,11 +297,13 @@ async def generate_content(request: Request, x_admin_token: str | None = Header(
         o=c.execute("select * from offers where id=%s", (offer_id,)).fetchone()
         if not o: raise HTTPException(404, "Оффер не найден")
         name=o["name"]; price=o["price"] or 0; commission=o["commission"] or 0
+        cpa_rate=o["cpa_rate"] or ""
+        rate_text=f"{cpa_rate}%" if cpa_rate and "%" not in str(cpa_rate) else str(cpa_rate)
         title=f"{name}: стоит ли покупать? Цена {price:g} ₽"
         script=(f"Сегодня разбираем товар «{name}». Цена — {price:g} ₽. "
                 f"Смотрим характеристики, кому он подходит и на что обратить внимание перед покупкой. "
                 f"Ссылка на актуальную цену — в описании. Переход по ссылке помогает отследить предложение. "
-                f"Потенциальная комиссия партнёра: до {commission:g} ₽.")
+                f"Партнёрская ставка по программе: {rate_text or 'уточняется'}.")
         return c.execute("""insert into content(offer_id,title,script,platform,status)
           values(%s,%s,%s,%s,'draft') returning *""",
           (offer_id,title,script,x.get("platform","rutube"))).fetchone()
@@ -366,7 +397,12 @@ input,textarea,select{width:100%;box-sizing:border-box;padding:10px;border:1px s
 table{width:100%;border-collapse:collapse;font-size:14px}td,th{text-align:left;padding:8px;border-bottom:1px solid #eee}
 .small{font-size:12px}.ok{color:#16803c}@media(max-width:700px){.grid{grid-template-columns:repeat(2,1fr)}table{display:block;overflow:auto;white-space:nowrap}}
 </style></head><body><main>
-<div class="card"><h1>CPA Factory</h1><div class="muted">Оффер → трекинг → контент → очередь публикации → аналитика</div><div class="small muted">Административные операции защищены токеном.</div></div>
+<div class="card"><h1>CPA Factory</h1><div class="muted">Оффер → трекинг → контент → очередь публикации → аналитика</div>
+<div class="small muted">Admitad: <span id="cpaStatus">проверка…</span></div>
+<button onclick="importCPA()">Обновить офферы из Admitad</button>
+<button onclick="showTop()">Показать приоритетные офферы</button>
+<div id="topOffers"></div>
+<div class="small muted">Административные операции защищены токеном.</div></div>
 <div class="grid"><div class="card"><div class="muted">Активные офферы</div><div id="m1" class="metric">0</div></div>
 <div class="card"><div class="muted">Материалы</div><div id="m2" class="metric">0</div></div>
 <div class="card"><div class="muted">Переходы</div><div id="m3" class="metric">0</div></div>
@@ -387,6 +423,7 @@ table{width:100%;border-collapse:collapse;font-size:14px}td,th{text-align:left;p
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 async function load(){
  let o=await (await fetch('/api/offers')).json(), c=await (await fetch('/api/content')).json(), s=await (await fetch('/api/stats')).json();
+ let cs=await (await fetch('/api/cpa/status')).json(); cpaStatus.textContent=cs.admitad_configured?'подключён':'нужна авторизация';
  m1.textContent=s.offers;m2.textContent=s.content;m3.textContent=s.clicks;m4.textContent=Number(s.commission||0).toLocaleString('ru-RU')+' ₽';
  offerSelect.innerHTML=o.map(x=>'<option value="'+x.id+'">'+esc(x.name)+'</option>').join('');
  offers.innerHTML=o.length?'<table><tr><th>Товар</th><th>Сеть</th><th>Цена</th><th>Комиссия</th><th>Переходы</th></tr>'+
@@ -410,6 +447,19 @@ async function adminFetch(url,opts={}){
  let r=await fetch(url,opts);
  if(r.status===401){localStorage.removeItem('cf_admin_token'); alert('Неверный токен администратора.');}
  return r;
+}
+async function importCPA(){
+ let r=await adminFetch('/api/cpa/import');
+ let x=await r.json().catch(()=>({}));
+ if(x.status==='not_configured'){alert('Admitad пока не подключён. Нужны API-токен и ID площадки в защищённых переменных Render.');return;}
+ if(!r.ok){alert(x.detail||'Ошибка импорта');return;}
+ alert('Импорт завершён: добавлено '+(x.added||0)+', обновлено '+(x.updated||0)+'.');
+ load();
+}
+async function showTop(){
+ let r=await fetch('/api/cpa/top?limit=10'), x=await r.json();
+ topOffers.innerHTML=x.length?'<table><tr><th>Оффер</th><th>EPC</th><th>CR</th><th>Рейтинг</th><th>Приоритет</th></tr>'+
+ x.map(v=>'<tr><td>'+esc(v.name)+'</td><td>'+Number(v.epc||0).toLocaleString('ru-RU')+'</td><td>'+Number(v.cr||0).toLocaleString('ru-RU')+'%</td><td>'+Number(v.rating||0).toLocaleString('ru-RU')+'</td><td>'+v.score+'</td></tr>').join('')+'</table>':'Подходящих активных офферов пока нет';
 }
 async function addOffer(){
  let r=await adminFetch('/api/offers',{method:'POST',body:JSON.stringify({name:name.value,merchant:merchant.value,price:price.value,commission:commission.value,tracking_url:url.value,traffic_rules:rules.value})});

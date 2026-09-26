@@ -187,17 +187,36 @@ def _admitad_get(url: str, token: str):
     with urllib.request.urlopen(req, timeout=25) as r:
         return json.loads(r.read().decode("utf-8"))
 
-def _gdeslon_get(url: str, wm_id: str, token: str):
-    import base64
-    raw=f"{wm_id}:{token}".encode()
-    headers={"Authorization":f"Basic {base64.b64encode(raw).decode()}","Accept":"application/json","User-Agent":"CPAFactory/1.0"}
-    req=urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=25) as r:
-        raw=r.read().decode("utf-8")
-        try:
-            return json.loads(raw)
-        except Exception:
-            return raw
+def _gdeslon_get(url: str, token: str):
+    # GdeSlon XML API: authentication is the _gs_at query parameter.
+    req=urllib.request.Request(url, headers={"Accept":"application/xml,text/xml","User-Agent":"CPAFactory/1.0"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return r.read().decode("utf-8")
+
+def _gdeslon_parse_xml(raw: str):
+    import xml.etree.ElementTree as ET
+    root=ET.fromstring(raw)
+    items=[]
+    for node in root.iter():
+        if node.tag.split("}")[-1].lower() != "offer":
+            continue
+        def child(name):
+            for ch in list(node):
+                if ch.tag.split("}")[-1].lower() == name.lower():
+                    return (ch.text or "").strip()
+            return ""
+        attrs=dict(node.attrib)
+        oid=attrs.get("id") or child("id") or child("offer_id")
+        name=child("name") or child("title")
+        link=child("url") or child("link")
+        price=child("price")
+        vendor=child("vendor") or child("brand")
+        desc=child("description")
+        category=child("categoryId") or child("category_id")
+        if oid and name and link:
+            items.append({"id":oid,"name":name,"url":link,"price":price,"vendor":vendor,
+                          "description":desc,"category_id":category,"raw":attrs})
+    return items
 
 def _first_rate(v):
     if v is None: return ""
@@ -251,44 +270,47 @@ def cpa_import(x_admin_token: str | None = Header(default=None)):
 @app.get("/api/cpa/import/gdeslon")
 def cpa_import_gdeslon(x_admin_token: str | None = Header(default=None)):
     require_admin(x_admin_token)
-    wm_id=os.getenv("GDESLON_WM_ID","").strip()
     token=os.getenv("GDESLON_API_TOKEN","").strip()
-    base=os.getenv("GDESLON_API_BASE","https://api.gdeslon.ru/api").rstrip("/")
-    if not wm_id or not token:
-        return {"status":"not_configured","message":"Нужны GDESLON_WM_ID и GDESLON_API_TOKEN"}
-    url=f"{base}/search.json?q={urllib.parse.quote(os.getenv('GDESLON_QUERY','') or '')}"
+    if not token:
+        return {"status":"not_configured","message":"Нужен GDESLON_API_TOKEN"}
+    query=os.getenv("GDESLON_QUERY","").strip()
+    limit=max(1,min(int(os.getenv("GDESLON_LIMIT","100") or 100),100))
+    page=max(1,int(os.getenv("GDESLON_PAGE","1") or 1))
+    params={"q":query,"l":str(limit),"p":str(page),"_gs_at":token}
+    url="https://www.gdeslon.ru/api/search.xml?"+urllib.parse.urlencode(params)
     try:
-        data=_gdeslon_get(url,wm_id,token)
+        raw=_gdeslon_get(url,token)
+        items=_gdeslon_parse_xml(raw)
     except Exception as e:
-        raise HTTPException(502,f"GdeSlon API: {e}")
-    items=data.get("offers",[]) if isinstance(data,dict) else []
+        raise HTTPException(502,f"GdeSlon XML API: {e}")
     added=updated=skipped=0
     with db() as c:
         for v in items:
-            oid=v.get("id") or v.get("offer_id")
-            name=v.get("name") or v.get("title")
-            link=v.get("url") or v.get("link")
-            if not oid or not name or not link:
-                skipped+=1; continue
-            rules=json.dumps({"source":"gdeslon","raw":v},ensure_ascii=False)[:12000]
-            commission=v.get("commission") or v.get("rate") or 0
+            oid=v["id"]; name=v["name"]; link=v["url"]
+            price=0.0
+            try: price=float(str(v.get("price") or "0").replace(" ","").replace(",","."))
+            except Exception: pass
+            rules=json.dumps({
+                "source":"gdeslon","vendor":v.get("vendor"),"category_id":v.get("category_id"),
+                "description":v.get("description"),"raw":v.get("raw")
+            },ensure_ascii=False)[:12000]
             existing=c.execute("select id from offers where source='gdeslon' and external_id=%s",(str(oid),)).fetchone()
             if existing:
-                c.execute("""update offers set name=%s,merchant=%s,tracking_url=%s,traffic_rules=%s,commission=%s,active=true where id=%s""",
-                          (name,"Где Слон?",link,rules,commission,existing["id"]))
+                c.execute("""update offers set name=%s,merchant=%s,price=%s,tracking_url=%s,traffic_rules=%s,active=true,site_url=%s where id=%s""",
+                          (name,"Где Слон?",price,link,rules,link,existing["id"]))
                 updated+=1
             else:
                 c.execute("""insert into offers(name,merchant,price,commission,tracking_url,traffic_rules,active,source,external_id,rating,epc,cr,cpa_rate,site_url)
-                    values(%s,%s,0,%s,%s,%s,true,'gdeslon',%s,0,0,0,%s,%s)""",
-                    (name,"Где Слон?",commission,link,rules,str(oid),str(commission),v.get("url")))
+                    values(%s,%s,%s,0,%s,%s,true,'gdeslon',%s,0,0,0,'',%s)""",
+                    (name,"Где Слон?",price,link,rules,str(oid),link))
                 added+=1
-    return {"status":"ok","source":"gdeslon","received":len(items),"added":added,"updated":updated,"skipped":skipped}
+    return {"status":"ok","source":"gdeslon","api":"xml","received":len(items),"added":added,"updated":updated,"skipped":skipped,"query":query,"page":page,"limit":limit}
 
 @app.get("/api/cpa/status")
 def cpa_status():
     return {
         "admitad_configured":bool(os.getenv("ADMITAD_ACCESS_TOKEN") and os.getenv("ADMITAD_WEBSITE_ID")),
-        "gdeslon_configured":bool(os.getenv("GDESLON_WM_ID") and os.getenv("GDESLON_API_TOKEN"))
+        "gdeslon_configured":bool(os.getenv("GDESLON_API_TOKEN"))
     }
 
 @app.get("/api/cpa/top")

@@ -354,9 +354,9 @@ def cpa_import_gdeslon(x_admin_token: str | None = Header(default=None)):
                           (name,"Где Слон?",price,link,rules,link,v.get("image_url"),existing["id"]))
                 updated+=1
             else:
-                c.execute("""insert into offers(name,merchant,price,commission,tracking_url,traffic_rules,active,source,external_id,rating,epc,cr,cpa_rate,site_url)
-                    values(%s,%s,%s,0,%s,%s,true,'gdeslon',%s,0,0,0,'',%s)""",
-                    (name,"Где Слон?",price,link,rules,str(oid),link,v.get("image_url"))))
+                c.execute("""insert into offers(name,merchant,price,commission,tracking_url,traffic_rules,active,source,external_id,rating,epc,cr,cpa_rate,site_url,image_url)
+                    values(%s,%s,%s,0,%s,%s,true,'gdeslon',%s,0,0,0,'',%s,%s)""",
+                    (name,"Где Слон?",price,link,rules,str(oid),link,v.get("image_url"))
                 added+=1
     return {"status":"ok","source":"gdeslon","api":"xml","received":len(items),"added":added,"updated":updated,"skipped":skipped,"query":query,"page":page,"limit":limit}
 

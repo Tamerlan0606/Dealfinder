@@ -498,13 +498,16 @@ def pipeline_status():
 def _pipeline_run():
     try:
         print("CPA_PIPELINE_STAGE", json.dumps({"stage":"start"}, ensure_ascii=False), flush=True)
-        try:
-            imported = cpa_import(ADMIN_TOKEN)
-        except Exception as e:
-            print("CPA_PIPELINE_STAGE", json.dumps({"stage":"admitad_error","error":f"{type(e).__name__}: {e}"}, ensure_ascii=False), flush=True)
-            imported = {"status":"error"}
-        print("CPA_PIPELINE_STAGE", json.dumps({"stage":"admitad_done","status":imported.get("status")}, ensure_ascii=False), flush=True)
-        if imported.get("status") == "not_configured" or imported.get("status") == "error":
+        with db() as c:
+            active_before=int(c.execute("select count(*) n from offers where active=true").fetchone()["n"])
+        print("CPA_PIPELINE_STAGE", json.dumps({"stage":"inventory","active_offers":active_before}, ensure_ascii=False), flush=True)
+        # Content generation must never depend on a live affiliate-network HTTP
+        # request. Importers populate the inventory separately; the pipeline
+        # consumes the already validated inventory. Only bootstrap from GdeSlon
+        # when the database is genuinely empty.
+        if active_before > 0:
+            imported={"status":"inventory_ready","active_offers":active_before}
+        else:
             print("CPA_PIPELINE_STAGE", json.dumps({"stage":"gdeslon_start"}, ensure_ascii=False), flush=True)
             try:
                 imported = cpa_import_gdeslon(ADMIN_TOKEN)

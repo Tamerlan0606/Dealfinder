@@ -1,5 +1,4 @@
-"""Render health-check compatibility and automatic MP4 self-test."""
-
+"""CPA Factory boot hooks."""
 try:
     from fastapi import FastAPI
     _original_api_route = FastAPI.api_route
@@ -12,30 +11,16 @@ try:
 except Exception:
     pass
 
-# Run one real ffmpeg/Pillow render automatically after the application module is loaded.
-# This verifies the production MP4 toolchain without requiring the user to click anything.
-def _mp4_selftest():
-    import os, shutil, threading
+def _boot():
     try:
         import app
-        row = {
-            "id": 0,
-            "title": "CPA Factory MP4 self-test",
-            "script": "MP4 self-test",
-            "platform": "rutube",
-            "scenes": '[{"time":"00:00-00:02","text":"CPA Factory MP4 test"},{"time":"00:02-00:04","text":"FFmpeg OK"}]'
-        }
-        offer = {"id": 0, "name": "MP4 self-test", "price": 0, "cpa_rate": ""}
-        path, tmp = app._make_mp4(0, row, offer)
-        size = os.path.getsize(path)
-        if size < 1000:
-            raise RuntimeError(f"MP4 слишком маленький: {size} bytes")
-        print("MP4_SELFTEST", {"status":"ok", "bytes":size, "ffmpeg":shutil.which("ffmpeg") or "imageio-ffmpeg"})
-        shutil.rmtree(tmp, ignore_errors=True)
+        import enhancements
+        print("CPA_ENHANCEMENTS_BOOT_OK", flush=True)
     except Exception as e:
-        print("MP4_SELFTEST", {"status":"error", "error":f"{type(e).__name__}: {e}"})
+        print("CPA_ENHANCEMENTS_BOOT_ERROR", type(e).__name__, str(e), flush=True)
 
 try:
-    threading.Timer(12, _mp4_selftest).start()
-except Exception:
-    pass
+    import threading
+    threading.Timer(1, _boot).start()
+except Exception as e:
+    print("CPA_ENHANCEMENTS_TIMER_ERROR", type(e).__name__, str(e), flush=True)

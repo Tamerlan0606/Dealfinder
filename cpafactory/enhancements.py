@@ -516,5 +516,8 @@ def enhancement_startup():
     print("CPA_ENHANCEMENTS_STARTED",json.dumps({"gdeslon":bool(os.getenv("GDESLON_API_TOKEN")),"yandex_market":bool(os.getenv("YANDEX_MARKET_OAUTH")),"wordstat":bool(os.getenv("YANDEX_SEARCH_API_KEY") and os.getenv("YANDEX_SEARCH_FOLDER_ID"))}),flush=True)
     threading.Thread(target=_deep_boot,daemon=True,name="cpa-deep-boot").start()
 
-# Compatibility fallback for runtimes that skip startup callbacks.
-threading.Timer(15.0,_deep_boot).start()
+# Deterministic fallback: start the deep production test shortly after module import.
+# This avoids relying on FastAPI startup-hook registration when this enhancement module
+# is imported during app initialization. The lock inside _deep_boot prevents duplicates.
+print("CPA_DEEP_BOOT_SCHEDULED",flush=True)
+threading.Timer(2.0,_deep_boot).start()

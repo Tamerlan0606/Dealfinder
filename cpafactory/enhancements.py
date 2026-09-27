@@ -58,10 +58,10 @@ def migrate():
             except Exception: pass
     print("CPA_ENHANCEMENTS_MIGRATION_OK",flush=True)
 
-def enrich_existing():
+def enrich_existing(limit=100):
     try:
         with core.db() as c:
-            rows=c.execute("select id,site_url,image_url,image_url2,video_url,video_url2 from offers where active=true and (video_url is null or video_url='') order by id desc limit 20").fetchall()
+            rows=c.execute("select id,site_url,image_url,image_url2,video_url,video_url2 from offers where active=true order by id desc limit %s",(max(1,min(int(limit),200)),)).fetchall()
             changed=0
             for r in rows:
                 if not r["site_url"]: continue
@@ -219,6 +219,69 @@ def mp4_selftest():
         result={"status":"error","error":f"{type(e).__name__}: {e}"}
         print("MP4_PRODUCTION_SELFTEST",json.dumps(result,ensure_ascii=False),flush=True)
         return result
+
+# Production TTS: male Russian neural voice, news-style pacing.
+def _edge_tts_audio(text, out_path):
+    text=str(text or "").strip()
+    if not text: raise ValueError("empty TTS text")
+    cli=shutil.which("edge-tts")
+    if not cli: raise RuntimeError("edge-tts executable not installed")
+    cmd=[cli,"--voice","ru-RU-DmitryNeural","--rate","+7%","--pitch","-1Hz","--text",text,"--write-media",out_path]
+    subprocess.run(cmd,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=45)
+    if not os.path.exists(out_path) or os.path.getsize(out_path)<1000: raise RuntimeError("no usable TTS audio")
+    return out_path
+
+def production_tts_audio(text,out_path):
+    try: return _edge_tts_audio(text,out_path)
+    except Exception as e:
+        print("EDGE_TTS_FALLBACK",type(e).__name__,str(e),flush=True)
+        return core._tts_audio(text,out_path)
+
+core._tts_audio=production_tts_audio
+
+# Read direct seller video fields from XML when present.
+_original_gdeslon_parse=core._gdeslon_parse_xml
+def parse_gdeslon_with_video(raw):
+    items=_original_gdeslon_parse(raw)
+    try:
+        import xml.etree.ElementTree as ET
+        root=ET.fromstring(raw); by_id={}
+        for n in root.iter():
+            if n.tag.split("}")[-1].lower() not in ("offer","product"): continue
+            attrs=dict(n.attrib); oid=attrs.get("id") or attrs.get("offer_id")
+            if not oid: continue
+            vids=[]
+            for ch in n.iter():
+                t=ch.tag.split("}")[-1].lower(); v=(ch.text or "").strip()
+                if "video" in t and v.startswith(("http://","https://")): vids.append(v)
+            if vids: by_id[str(oid)]=vids[:2]
+        for x in items:
+            vids=by_id.get(str(x.get("id")),[])
+            x["video_url"]=vids[0] if vids else ""
+            x["video_url2"]=vids[1] if len(vids)>1 else ""
+    except Exception as e:
+        print("GDESLON_VIDEO_PARSE_ERROR",type(e).__name__,str(e),flush=True)
+    return items
+core._gdeslon_parse_xml=parse_gdeslon_with_video
+
+_original_gdeslon_import=core.cpa_import_gdeslon
+def import_gdeslon_with_video(x_admin_token: str | None = Header(default=None)):
+    result=_original_gdeslon_import(x_admin_token)
+    try:
+        with core.db() as c:
+            rows=c.execute("select id,site_url,image_url,image_url2,video_url,video_url2 from offers where active=true and source='gdeslon' order by id desc limit 100").fetchall()
+            changed=0
+            for r in rows:
+                if not r["site_url"]: continue
+                m=fetch_media(str(r["site_url"]))
+                vals={k:(r[k] or m.get(k,"")) for k in MEDIA_KEYS}
+                if any(vals[k] != (r[k] or "") for k in MEDIA_KEYS):
+                    c.execute("update offers set image_url=%s,image_url2=%s,video_url=%s,video_url2=%s where id=%s",(vals["image_url"],vals["image_url2"],vals["video_url"],vals["video_url2"],r["id"]))
+                    changed+=1
+            result["media_checked"]=len(rows); result["media_changed"]=changed
+    except Exception as e: result["media_error"]=f"{type(e).__name__}: {e}"
+    return result
+core.cpa_import_gdeslon=import_gdeslon_with_video
 
 def _download(url,path,limit=30*1024*1024):
     try:

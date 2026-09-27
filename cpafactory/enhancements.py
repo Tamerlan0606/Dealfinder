@@ -76,26 +76,32 @@ def enrich_existing():
         print("CPA_MEDIA_ENRICH_ERROR",type(e).__name__,str(e),flush=True)
 
 def wordstat_count(phrase):
-    token=os.getenv("YANDEX_WORDSTAT_OAUTH","").strip()
-    if not token or not phrase: return 0
+    token=os.getenv("YANDEX_SEARCH_API_KEY","").strip()
+    if not token or not phrase:
+        return 0
     try:
-        regions=[int(x) for x in os.getenv("YANDEX_WORDSTAT_REGIONS","").split(",") if x.strip().isdigit()]
-        devices=[x.strip() for x in os.getenv("YANDEX_WORDSTAT_DEVICES","phone").split(",") if x.strip()]
-        body={"phrase":str(phrase)[:300]}
+        regions=[x.strip() for x in os.getenv("YANDEX_WORDSTAT_REGIONS","").split(",") if x.strip()]
+        devices=[x.strip() for x in os.getenv("YANDEX_WORDSTAT_DEVICES","DEVICE_PHONE").split(",") if x.strip()]
+        body={"phrase":str(phrase)[:300],"numPhrases":50}
         if regions: body["regions"]=regions
         if devices: body["devices"]=devices
-        req=urllib.request.Request("https://api.wordstat.yandex.net/v1/topRequests",
-          data=json.dumps(body,ensure_ascii=False).encode(),headers={"Authorization":f"Bearer {token}","Content-Type":"application/json"},method="POST")
-        with urllib.request.urlopen(req,timeout=20) as r: data=json.loads(r.read().decode())
-        rows=data.get("topRequests") or []
-        exact=[int(x.get("count") or 0) for x in rows if str(x.get("phrase","")).strip().lower()==str(phrase).strip().lower()]
-        return max(exact or [max([int(x.get("count") or 0) for x in rows] or [0])])
+        req=urllib.request.Request(
+            "https://searchapi.api.cloud.yandex.net/v2/wordstat/topRequests",
+            data=json.dumps(body,ensure_ascii=False).encode(),
+            headers={"Authorization":f"Api-Key {token}","Content-Type":"application/json"},
+            method="POST")
+        with urllib.request.urlopen(req,timeout=20) as r:
+            data=json.loads(r.read().decode())
+        rows=data.get("results") or []
+        target=str(phrase).strip().lower()
+        exact=[int(x.get("count") or 0) for x in rows if str(x.get("phrase","")).strip().lower()==target]
+        return max(exact or [max([int(x.get("count") or 0) for x in rows] or [int(data.get("totalCount") or 0)])])
     except Exception as e:
         print("WORDSTAT_ERROR",type(e).__name__,str(e),flush=True)
         return 0
 
 def refresh_demand(limit=30):
-    if not os.getenv("YANDEX_WORDSTAT_OAUTH","").strip():
+    if not os.getenv("YANDEX_SEARCH_API_KEY","").strip():
         return {"status":"not_configured","checked":0}
     with core.db() as c:
         rows=c.execute("select id,name from offers where active=true order by id desc limit %s",(max(1,min(limit,100)),)).fetchall()
@@ -200,7 +206,8 @@ def mp4_selftest():
             if not row: return {"status":"no_content"}
             offer_id=row["offer_id"] if "offer_id" in row.keys() else None
             offer=c.execute("select * from offers where id=%s",(offer_id,)).fetchone() if offer_id else c.execute("select * from offers order by id desc limit 1").fetchone()
-        row=dict(row); offer=dict(offer) if offer else {}\n        path,tmp=core._make_mp4(row["id"],row,offer)
+        row=dict(row); offer=dict(offer) if offer else {}
+        path,tmp=core._make_mp4(row["id"],row,offer)
         size=os.path.getsize(path)
         shutil.rmtree(tmp,ignore_errors=True)
         result={"status":"ok","content_id":row["id"],"bytes":size,"seller_video":bool(offer.get("video_url") or offer.get("video_url2")) if hasattr(offer,"get") else False}

@@ -271,10 +271,14 @@ def _admitad_get(url: str, token: str):
         return json.loads(r.read().decode("utf-8"))
 
 def _gdeslon_get(url: str, token: str):
-    # GdeSlon XML API: authentication is the _gs_at query parameter.
+    # Bound both socket latency and response size; an oversized feed must not
+    # block the production content pipeline.
     req=urllib.request.Request(url, headers={"Accept":"application/xml,text/xml","User-Agent":"CPAFactory/1.0"})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return r.read().decode("utf-8")
+    with urllib.request.urlopen(req, timeout=20) as r:
+        data=r.read(8*1024*1024)
+    if len(data) >= 8*1024*1024:
+        raise RuntimeError("GdeSlon XML response exceeded 8 MB; reduce GDESLON_LIMIT")
+    return data.decode("utf-8")
 
 def _gdeslon_parse_xml(raw: str):
     import xml.etree.ElementTree as ET
@@ -358,7 +362,7 @@ def cpa_import_gdeslon(x_admin_token: str | None = Header(default=None)):
     if not token:
         return {"status":"not_configured","message":"Нужен GDESLON_API_TOKEN"}
     query=os.getenv("GDESLON_QUERY","").strip()
-    limit=max(1,min(int(os.getenv("GDESLON_LIMIT","100") or 100),100))
+    limit=max(1,min(int(os.getenv("GDESLON_LIMIT","20") or 20),20))
     page=max(1,int(os.getenv("GDESLON_PAGE","1") or 1))
     params={"q":query,"l":str(limit),"p":str(page),"_gs_at":token}
     url="https://www.gdeslon.ru/api/search.xml?"+urllib.parse.urlencode(params)

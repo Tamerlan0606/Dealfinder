@@ -383,10 +383,11 @@ def make_mp4_seller_first(content_id,row,offer):
                 seg=os.path.join(tmp,f"s{i}.mp4")
                 off=0 if vd<=1 else ((i-1)*4.5)%max(vd-1,1)
                 cmd=[ff,"-y","-stream_loop","-1","-ss",f"{off:.2f}","-i",video]
+                if audio: cmd += ["-i",audio]
                 cmd += ["-t",f"{dur:.2f}","-vf",
                         "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,format=yuv420p",
                         "-r","30","-map","0:v:0"]
-                if audio: cmd += ["-i",audio,"-map","1:a:0"]
+                if audio: cmd += ["-map","1:a:0"]
                 cmd += ["-c:v","libx264","-preset","veryfast","-crf","20"]
                 if audio: cmd += ["-c:a","aac","-b:a","160k","-shortest"]
                 cmd += ["-movflags","+faststart",seg]

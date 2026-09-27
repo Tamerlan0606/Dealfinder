@@ -199,8 +199,10 @@ def demand_top(limit=10):
 _original_pipeline=core._pipeline_run
 def pipeline_with_demand():
     try:
+        # Keep the commercial pipeline bounded. Seller-page media enrichment is
+        # a separate worker; doing up to 100 HTTP fetches inside every pipeline
+        # cycle caused the worker to run for minutes and blocked content creation.
         refresh_demand(30)
-        enrich_existing()
     except Exception as e:
         print("CPA_PREP_ERROR",type(e).__name__,str(e),flush=True)
     # The original pipeline uses the module-global cpa_top symbol.
@@ -571,5 +573,5 @@ def enhancement_startup():
 # Deterministic fallback: start the deep production test shortly after module import.
 # This avoids relying on FastAPI startup-hook registration when this enhancement module
 # is imported during app initialization. The lock inside _deep_boot prevents duplicates.
-print("CPA_DEEP_BOOT_SCHEDULED",flush=True)
-threading.Timer(2.0,_deep_boot).start()
+# Deep production validation is triggered after a successful normal pipeline cycle.
+

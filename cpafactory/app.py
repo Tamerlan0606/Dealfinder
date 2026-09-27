@@ -150,8 +150,7 @@ def init():
         c.execute("create unique index if not exists uq_offers_source_external on offers(source,external_id) where external_id is not null")
 
 _AUTOPILOT_LOCK = threading.Lock()
-_VIDEO_JOBS = {}
-_VIDEO_JOBS_LOCK = threading.Lock()
+_VIDEO_JOBS = {}\n_VIDEO_JOBS_LOCK = threading.Lock()\n\ndef _video_progress(job_id, percent, stage):\n    with _VIDEO_JOBS_LOCK:\n        job = _VIDEO_JOBS.get(job_id)\n        if job:\n            job['progress'] = max(0, min(100, int(percent)))\n            job['stage'] = str(stage)
 _AUTOPILOT_INTERVAL = max(900, int(os.getenv("CPA_AUTOPILOT_INTERVAL", "3600") or 3600))
 
 def _autopilot_loop():
@@ -780,17 +779,12 @@ def build_content_pack(row, offer):
             "description":description,"cta":cta,"tracking_link":link,"scenes":scenes,
             "thumbnail_prompt":thumb,"voice_script":row["script"],"platform":row["platform"]}
 
-def _video_job_run(content_id:int, job_id:str):
-    tmp=None
-    try:
-        with db() as c:
+def _video_job_run(content_id:int, job_id:str):\n    tmp=None\n    try:\n        _video_progress(job_id, 2, 'Запуск генерации')\n        with db() as c:
             row=c.execute("select * from content where id=%s",(content_id,)).fetchone()
             if not row: raise RuntimeError("Материал не найден")
             offer=c.execute("select * from offers where id=%s",(row["offer_id"],)).fetchone()
             if not offer: raise RuntimeError("Оффер не найден")
-        path,tmp=_make_mp4(content_id,row,offer)
-        with _VIDEO_JOBS_LOCK:
-            _VIDEO_JOBS[job_id]={"status":"ready","content_id":content_id,"path":path,"tmp":tmp}
+        path,tmp=_make_mp4(content_id,row,offer)\n        _video_progress(job_id, 98, 'Финальная сборка')\n        _video_progress(job_id, 98, 'Финальная сборка')\n        with _VIDEO_JOBS_LOCK:\n            _VIDEO_JOBS[job_id]={"status":"ready","content_id":content_id,"path":path,"tmp":tmp,"progress":100,"stage":"Видео готово"}
     except Exception as e:
         if tmp: shutil.rmtree(tmp,ignore_errors=True)
         with _VIDEO_JOBS_LOCK:
@@ -803,7 +797,7 @@ def content_mp4(content_id:int):
     if not row: raise HTTPException(404,"Материал не найден")
     with _VIDEO_JOBS_LOCK:
         job_id=__import__("uuid").uuid4().hex
-        _VIDEO_JOBS[job_id]={"status":"queued","content_id":content_id}
+        _VIDEO_JOBS[job_id]={"status":"queued","content_id":content_id,"progress":0,"stage":"Задача поставлена в очередь"}
         threading.Thread(target=_video_job_run,args=(content_id,job_id),daemon=True).start()
     return RedirectResponse(f"/video/{content_id}?job={job_id}",status_code=303)
 
@@ -834,10 +828,10 @@ def video_viewer(content_id:int,job:str|None=None):
     return HTMLResponse(
         "<!doctype html><html lang='ru'><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
         f"<title>Видео #{content_id}</title><body style='font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#111;color:#fff;margin:0;padding:20px'>"
-        f"<h2>Видео #{content_id}</h2><p id='s'>Подготавливаю видео…</p><video id='v' controls playsinline style='width:100%;max-width:720px;max-height:85vh;background:#000;display:none'></video>"
-        f"<script>const job={json.dumps(job or '')};const s=document.getElementById('s'),v=document.getElementById('v');"
+        f"<h2>Видео #{content_id}</h2><div style='margin:16px 0'><div style='height:14px;background:#333;border-radius:8px;overflow:hidden'><div id='bar' style='height:100%;width:0%;background:#fff;border-radius:8px;transition:width .4s'></div></div><div style='display:flex;justify-content:space-between;margin-top:8px'><b id='pct'>0%</b><span id='s' style='color:#aaa'>Запуск генерации</span></div></div><video id='v' controls playsinline style='width:100%;max-width:720px;max-height:85vh;background:#000;display:none'></video>"
+        f"<script>const job={json.dumps(job or '')};const s=document.getElementById('s'),p=document.getElementById('pct'),b=document.getElementById('bar'),v=document.getElementById('v');"
         "async function poll(){if(!job){s.textContent='Нет задачи генерации видео';return;}try{const r=await fetch('/api/video-job/'+job);const x=await r.json();"
-        "if(x.status==='ready'){v.src=x.video_url;v.style.display='block';s.textContent='Видео готово';return;}"
+        "if(x.progress!==undefined){const n=Math.max(0,Math.min(100,Number(x.progress)||0));p.textContent=n+'%';b.style.width=n+'%';}if(x.stage)s.textContent=x.stage;if(x.status==='ready'){p.textContent='100%';b.style.width='100%';v.src=x.video_url;v.style.display='block';s.textContent='Видео готово';return;}"
         "if(x.status==='error'){s.textContent='Ошибка: '+(x.error||'неизвестная ошибка');return;}"
         "s.textContent='Подготавливаю видео…';setTimeout(poll,1500);}catch(e){s.textContent='Связь с сервером прервана. Повторяю…';setTimeout(poll,2000)}}poll();</script></body></html>"
     )

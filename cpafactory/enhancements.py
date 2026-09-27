@@ -213,7 +213,10 @@ def pipeline_with_demand():
 
 core._pipeline_run=pipeline_with_demand
 
+_LAST_PREVIEW_VIDEO = {"path":"", "tmp":"", "content_id":0}
+
 def mp4_selftest():
+    global _LAST_PREVIEW_VIDEO
     try:
         with core.db() as c:
             row=c.execute("select * from content order by id desc limit 1").fetchone()
@@ -221,16 +224,33 @@ def mp4_selftest():
             offer_id=row["offer_id"] if "offer_id" in row.keys() else None
             offer=c.execute("select * from offers where id=%s",(offer_id,)).fetchone() if offer_id else c.execute("select * from offers order by id desc limit 1").fetchone()
         row=dict(row); offer=dict(offer) if offer else {}
+        old_tmp=_LAST_PREVIEW_VIDEO.get("tmp")
+        if old_tmp: shutil.rmtree(old_tmp,ignore_errors=True)
         path,tmp=core._make_mp4(row["id"],row,offer)
         size=os.path.getsize(path)
-        shutil.rmtree(tmp,ignore_errors=True)
-        result={"status":"ok","content_id":row["id"],"bytes":size,"seller_video":bool(offer.get("video_url") or offer.get("video_url2")) if hasattr(offer,"get") else False}
+        _LAST_PREVIEW_VIDEO={"path":path,"tmp":tmp,"content_id":int(row["id"])}
+        result={"status":"ok","content_id":row["id"],"bytes":size,"seller_video":bool(offer.get("video_url") or offer.get("video_url2"))}
         print("MP4_PRODUCTION_SELFTEST",json.dumps(result,ensure_ascii=False),flush=True)
+        print("MP4_PREVIEW_READY",json.dumps({"content_id":row["id"],"bytes":size},ensure_ascii=False),flush=True)
         return result
     except Exception as e:
         result={"status":"error","error":f"{type(e).__name__}: {e}"}
         print("MP4_PRODUCTION_SELFTEST",json.dumps(result,ensure_ascii=False),flush=True)
         return result
+
+@core.app.get("/api/preview-video")
+def preview_video():
+    path=_LAST_PREVIEW_VIDEO.get("path")
+    if not path or not os.path.exists(path):
+        raise HTTPException(404,"Готового preview-видео пока нет")
+    return core.FileResponse(path,media_type="video/mp4",filename=f"cpafactory_preview_{_LAST_PREVIEW_VIDEO.get('content_id','video')}.mp4",content_disposition_type="inline")
+
+@core.app.get("/api/preview-video/status")
+def preview_video_status():
+    path=_LAST_PREVIEW_VIDEO.get("path")
+    if path and os.path.exists(path):
+        return {"status":"ready","content_id":_LAST_PREVIEW_VIDEO.get("content_id"),"video_url":"/api/preview-video"}
+    return {"status":"not_ready"}
 
 # Production TTS: male Russian neural voice, news-style pacing.
 def _edge_tts_audio(text, out_path):

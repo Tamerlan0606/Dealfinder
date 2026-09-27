@@ -286,10 +286,29 @@ def production_tts_audio(text,out_path):
     try:
         piper=shutil.which("piper")
         if piper:
-            cmd=[piper,"--model","ru_RU-ruslan-medium","--output_file",out_path,
-                 "--length_scale","1.12"]
-            subprocess.run(cmd,input=str(text or ""),text=True,check=True,
-                           stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=60)
+            voice_dir=os.path.join(tempfile.gettempdir(),"cpafactory_piper_voices")
+            os.makedirs(voice_dir,exist_ok=True)
+            model=os.path.join(voice_dir,"ru_RU-ruslan-medium.onnx")
+            model_json=model+".json"
+            if not (os.path.exists(model) and os.path.exists(model_json)):
+                dl=subprocess.run(
+                    [__import__("sys").executable,"-m","piper.download_voices",
+                     "--data-dir",voice_dir,"ru_RU-ruslan-medium"],
+                    capture_output=True,text=True,timeout=120
+                )
+                if dl.returncode!=0:
+                    raise RuntimeError("Piper voice download failed: "+dl.stderr[-800:])
+            wav_path=out_path+".wav"
+            cmd=[piper,"--data-dir",voice_dir,"--model","ru_RU-ruslan-medium",
+                 "--output_file",wav_path,"--length_scale","1.12"]
+            pr=subprocess.run(cmd,input=str(text or ""),text=True,check=True,
+                              stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=60)
+            ff=_ffmpeg_exe()
+            if not ff: raise RuntimeError("ffmpeg недоступен для конвертации Piper WAV")
+            subprocess.run([ff,"-y","-i",wav_path,"-codec:a","libmp3lame","-b:a","128k",out_path],
+                           check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=30)
+            try: os.remove(wav_path)
+            except Exception: pass
             if os.path.exists(out_path) and os.path.getsize(out_path)>1000:
                 print("PIPER_TTS_OK",json.dumps({"voice":"ru_RU-ruslan-medium","bytes":os.path.getsize(out_path)},ensure_ascii=False),flush=True)
                 return out_path

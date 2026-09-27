@@ -149,7 +149,8 @@ _AUTOPILOT_INTERVAL = max(900, int(os.getenv("CPA_AUTOPILOT_INTERVAL", "3600") o
 
 def _autopilot_loop():
     import time
-    time.sleep(30)
+    time.sleep(5)
+    print("CPA_AUTOPILOT_STARTED", json.dumps({"interval_seconds": _AUTOPILOT_INTERVAL}, ensure_ascii=False))
     while True:
         try:
             if _AUTOPILOT_LOCK.acquire(blocking=False):

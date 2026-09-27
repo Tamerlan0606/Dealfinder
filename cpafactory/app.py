@@ -121,6 +121,8 @@ def init():
                 "alter table offers add column cr real default 0",
                 "alter table offers add column cpa_rate text",
                 "alter table offers add column site_url text",
+                "alter table offers add column image_url text",
+                "alter table offers add column image_url2 text",
                 "alter table content add column description text",
                 "alter table content add column hook text",
                 "alter table content add column cta text",
@@ -137,6 +139,8 @@ def init():
             c.execute("alter table offers add column if not exists cr numeric default 0")
             c.execute("alter table offers add column if not exists cpa_rate text")
             c.execute("alter table offers add column if not exists site_url text")
+            c.execute("alter table offers add column if not exists image_url text")
+            c.execute("alter table offers add column if not exists image_url2 text")
             c.execute("alter table content add column if not exists description text")
             c.execute("alter table content add column if not exists hook text")
             c.execute("alter table content add column if not exists cta text")
@@ -258,13 +262,14 @@ def _gdeslon_parse_xml(raw: str):
         oid=attrs.get("id") or child("id") or child("offer_id")
         name=child("name") or child("title")
         link=child("url") or child("link")
+        image=child("picture") or child("image") or child("image_url") or child("imageLink")
         price=child("price")
         vendor=child("vendor") or child("brand")
         desc=child("description")
         category=child("categoryId") or child("category_id")
         if oid and name and link:
             items.append({"id":oid,"name":name,"url":link,"price":price,"vendor":vendor,
-                          "description":desc,"category_id":category,"raw":attrs})
+                          "description":desc,"category_id":category,"image_url":image,"raw":attrs})
     return items
 
 def _first_rate(v):
@@ -345,13 +350,13 @@ def cpa_import_gdeslon(x_admin_token: str | None = Header(default=None)):
             },ensure_ascii=False)[:12000]
             existing=c.execute("select id from offers where source='gdeslon' and external_id=%s",(str(oid),)).fetchone()
             if existing:
-                c.execute("""update offers set name=%s,merchant=%s,price=%s,tracking_url=%s,traffic_rules=%s,active=true,site_url=%s where id=%s""",
-                          (name,"Где Слон?",price,link,rules,link,existing["id"]))
+                c.execute("""update offers set name=%s,merchant=%s,price=%s,tracking_url=%s,traffic_rules=%s,active=true,site_url=%s,image_url=%s where id=%s""",
+                          (name,"Где Слон?",price,link,rules,link,v.get("image_url"),existing["id"]))
                 updated+=1
             else:
                 c.execute("""insert into offers(name,merchant,price,commission,tracking_url,traffic_rules,active,source,external_id,rating,epc,cr,cpa_rate,site_url)
                     values(%s,%s,%s,0,%s,%s,true,'gdeslon',%s,0,0,0,'',%s)""",
-                    (name,"Где Слон?",price,link,rules,str(oid),link))
+                    (name,"Где Слон?",price,link,rules,str(oid),link,v.get("image_url"))))
                 added+=1
     return {"status":"ok","source":"gdeslon","api":"xml","received":len(items),"added":added,"updated":updated,"skipped":skipped,"query":query,"page":page,"limit":limit}
 
@@ -746,21 +751,27 @@ def build_content_pack(row, offer):
     rate = offer["cpa_rate"] or ""
     rate_text = f"{rate}%" if rate and "%" not in str(rate) else str(rate)
     link = f"/go/{offer['id']}?content_id={row['id']}"
-    hook = f"СТОП. Перед покупкой «{name}» проверьте эти 3 вещи."
+    hook = f"СТОП. Вот что важно знать перед покупкой «{name}»."
     description = (f"Разбираем «{name}»: цена, ключевые характеристики, кому подходит и что проверить перед покупкой.\\n\\n"
                    f"🔗 Актуальная цена и предложение: {link}\\n\\n"
                    f"Партнёрская ставка: {rate_text or 'уточняется'}.\\n"
                    f"Информация об оффере может изменяться продавцом.")
-    cta = f"Полная информация и актуальная цена — по ссылке в описании: {link}"
+    cta = f"Актуальная цена и предложение — по ссылке в описании: {link}"
     scenes = [
-        {"time":"00:00-00:05","text":hook},
-        {"time":"00:05-00:15","text":f"Что это: {name}. Цена: {price_label}."},
-        {"time":"00:15-00:30","text":"Показываем ключевые характеристики и кому этот вариант подходит."},
-        {"time":"00:30-00:45","text":"Проверяем важные ограничения, условия покупки и на что смотреть перед заказом."},
-        {"time":"00:45-00:55","text":cta},
-        {"time":"00:55-01:00","text":"Сохраняйте ролик и проверяйте цену перед покупкой."}
+        {"time":"00:00-00:04","text":hook},
+        {"time":"00:04-00:09","text":f"{name}. Цена сейчас — {price_label}."},
+        {"time":"00:09-00:14","text":"Сначала смотрим, что именно вы получаете за эти деньги."},
+        {"time":"00:14-00:19","text":"Ключевые характеристики — коротко и по делу."},
+        {"time":"00:19-00:24","text":"Кому этот товар действительно подходит?"},
+        {"time":"00:24-00:29","text":"Что проверить перед оформлением заказа."},
+        {"time":"00:29-00:34","text":"Цена и условия могут меняться — проверяйте актуальное предложение."},
+        {"time":"00:34-00:39","text":"Сравните комплектацию и характеристики перед оплатой."},
+        {"time":"00:39-00:44","text":"Если характеристики подходят — переходите к актуальному предложению."},
+        {"time":"00:44-00:49","text":"Ссылка на товар находится в описании ролика."},
+        {"time":"00:49-00:55","text":cta},
+        {"time":"00:55-01:00","text":"Сохраните ролик, чтобы быстро вернуться к товару."}
     ]
-    thumb = f"Вертикальная обложка 9:16 для RUTUBE: крупный текст «{name} — стоит ли покупать?», визуально показать товар/категорию, высокий контраст, чистый фон, без логотипов и мелкого текста."
+    thumb = f"Премиальная вертикальная обложка 9:16 для RUTUBE: крупно показать реальный товар «{name}», рядом короткий заголовок «Стоит ли покупать?», современный минималистичный дизайн, много воздуха, без мелкого текста."
     return {"content_id":int(row["id"]),"offer_id":int(offer["id"]),"title":row["title"],"hook":hook,
             "description":description,"cta":cta,"tracking_link":link,"scenes":scenes,
             "thumbnail_prompt":thumb,"voice_script":row["script"],"platform":row["platform"]}

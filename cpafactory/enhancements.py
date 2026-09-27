@@ -279,39 +279,47 @@ def _edge_tts_audio(text, out_path):
     if not os.path.exists(out_path) or os.path.getsize(out_path)<1000: raise RuntimeError("no usable TTS audio")
     return out_path
 
+_PIPER_VOICE = None
+_PIPER_VOICE_LOCK = threading.Lock()
+
+def _piper_audio(text,out_path):
+    global _PIPER_VOICE
+    import wave
+    from piper import PiperVoice, SynthesisConfig
+    voice_dir=os.path.join(tempfile.gettempdir(),"cpafactory_piper_voices")
+    os.makedirs(voice_dir,exist_ok=True)
+    model=os.path.join(voice_dir,"ru_RU-ruslan-medium.onnx")
+    model_json=model+".json"
+    if not (os.path.exists(model) and os.path.exists(model_json)):
+        dl=subprocess.run(
+            [__import__("sys").executable,"-m","piper.download_voices",
+             "--data-dir",voice_dir,"ru_RU-ruslan-medium"],
+            capture_output=True,text=True,timeout=120
+        )
+        if dl.returncode!=0:
+            raise RuntimeError("Piper voice download failed: "+dl.stderr[-800:])
+    with _PIPER_VOICE_LOCK:
+        if _PIPER_VOICE is None:
+            _PIPER_VOICE=PiperVoice.load(model)
+    wav_path=out_path+".wav"
+    syn=SynthesisConfig(length_scale=1.12)
+    with wave.open(wav_path,"wb") as wf:
+        _PIPER_VOICE.synthesize_wav(str(text or ""),wf,syn_config=syn)
+    ff=_ffmpeg_exe()
+    if not ff: raise RuntimeError("ffmpeg недоступен")
+    subprocess.run([ff,"-y","-i",wav_path,"-codec:a","libmp3lame","-b:a","128k",out_path],
+                   check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=30)
+    try: os.remove(wav_path)
+    except Exception: pass
+    if not os.path.exists(out_path) or os.path.getsize(out_path)<1000:
+        raise RuntimeError("Piper не создал MP3")
+    return out_path
+
 def production_tts_audio(text,out_path):
-    # Primary production voice: local Piper Russian male neural voice. This
-    # removes dependence on Microsoft Edge's outbound WebSocket service and
-    # keeps speech generation deterministic on Render.
     try:
-        piper=shutil.which("piper")
-        if piper:
-            voice_dir=os.path.join(tempfile.gettempdir(),"cpafactory_piper_voices")
-            os.makedirs(voice_dir,exist_ok=True)
-            model=os.path.join(voice_dir,"ru_RU-ruslan-medium.onnx")
-            model_json=model+".json"
-            if not (os.path.exists(model) and os.path.exists(model_json)):
-                dl=subprocess.run(
-                    [__import__("sys").executable,"-m","piper.download_voices",
-                     "--data-dir",voice_dir,"ru_RU-ruslan-medium"],
-                    capture_output=True,text=True,timeout=120
-                )
-                if dl.returncode!=0:
-                    raise RuntimeError("Piper voice download failed: "+dl.stderr[-800:])
-            wav_path=out_path+".wav"
-            cmd=[piper,"--data-dir",voice_dir,"--model","ru_RU-ruslan-medium",
-                 "--output_file",wav_path,"--length_scale","1.12"]
-            pr=subprocess.run(cmd,input=str(text or ""),text=True,check=True,
-                              stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=60)
-            ff=_ffmpeg_exe()
-            if not ff: raise RuntimeError("ffmpeg недоступен для конвертации Piper WAV")
-            subprocess.run([ff,"-y","-i",wav_path,"-codec:a","libmp3lame","-b:a","128k",out_path],
-                           check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=30)
-            try: os.remove(wav_path)
-            except Exception: pass
-            if os.path.exists(out_path) and os.path.getsize(out_path)>1000:
-                print("PIPER_TTS_OK",json.dumps({"voice":"ru_RU-ruslan-medium","bytes":os.path.getsize(out_path)},ensure_ascii=False),flush=True)
-                return out_path
+        result=_piper_audio(text,out_path)
+        print("PIPER_TTS_OK",json.dumps({"voice":"ru_RU-ruslan-medium","bytes":os.path.getsize(result)},ensure_ascii=False),flush=True)
+        return result
     except Exception as ex:
         print("PIPER_TTS_FALLBACK",type(ex).__name__,str(ex),flush=True)
     try:
@@ -319,8 +327,6 @@ def production_tts_audio(text,out_path):
     except Exception as ex:
         print("EDGE_TTS_FALLBACK",type(ex).__name__,str(ex),flush=True)
         return core._tts_audio(text,out_path)
-
-core._tts_audio=production_tts_audio
 
 # Read direct seller video fields from XML when present.
 _original_gdeslon_parse=core._gdeslon_parse_xml

@@ -597,8 +597,8 @@ def _make_mp4(content_id, row, offer):
                 m=re.search(r'(\\d+):(\\d+)-(\\d+):(\\d+)',str(sc.get('time','')))
                 if m:
                     dur=max(2,(int(m.group(3))*60+int(m.group(4)))-(int(m.group(1))*60+int(m.group(2))))
-                f.write(f"file '{p}'\\nduration {dur}\\n")
-            f.write(f"file '{files[-1]}'\\n")
+                f.write(f"file '{p}'\nduration {dur}\n")
+            f.write(f"file '{files[-1]}'\n")
         out=os.path.join(tmp,f'content_{content_id}.mp4')
         subprocess.run([ffmpeg,'-y','-f','concat','-safe','0','-i',concat,'-vf','scale=1080:1920,format=yuv420p','-r','30','-movflags','+faststart',out],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=90)
         return out,tmp

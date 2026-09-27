@@ -567,7 +567,7 @@ async def import_offers(request: Request, x_admin_token: str | None = Header(def
     return {"added":added}
 
 def _video_text(s):
-    s=re.sub(r'\\s+',' ',str(s or '')).strip()
+    s=re.sub(r'\s+',' ',str(s or '')).strip()
     return s
 
 def _wrap_lines(text, width=30):
@@ -603,23 +603,23 @@ def _make_mp4(content_id, row, offer):
         font_paths=['/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf','/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf']
         font_path=next((p for p in font_paths if os.path.exists(p)),None)
         if not font_path: raise HTTPException(503,'Шрифт для MP4 не найден')
-        font=ImageFont.truetype(font_path,58); small=ImageFont.truetype(font_path,34)
+        font=ImageFont.truetype(font_path,42); small=ImageFont.truetype(font_path,25)
         files=[]
         for i,sc in enumerate(scenes):
-            im=Image.new('RGB',(1080,1920),'white'); d=ImageDraw.Draw(im)
-            d.text((70,150), 'CPA FACTORY', font=small, fill='black')
+            im=Image.new('RGB',(720,1280),'white'); d=ImageDraw.Draw(im)
+            d.text((45,100), 'CPA FACTORY', font=small, fill='black')
             lines=_wrap_lines(sc.get('text',''),28)
-            y=520
+            y=340
             for line in lines:
                 bbox=d.textbbox((0,0),line,font=font); w=bbox[2]-bbox[0]
-                d.text(((1080-w)/2,y),line,font=font,fill='black'); y+=82
-            d.text((70,1760),f"Сцена {i+1}/{len(scenes)}",font=small,fill='black')
+                d.text(((720-w)/2,y),line,font=font,fill='black'); y+=60
+            d.text((45,1165),f"Сцена {i+1}/{len(scenes)}",font=small,fill='black')
             path=os.path.join(tmp,f'{i:03d}.png'); im.save(path); files.append(path)
         concat=os.path.join(tmp,'concat.txt')
         with open(concat,'w',encoding='utf-8') as f:
             for p,sc in zip(files,scenes):
                 dur=5
-                m=re.search(r'(\\d+):(\\d+)-(\\d+):(\\d+)',str(sc.get('time','')))
+                m=re.search(r'(\d+):(\d+)-(\d+):(\d+)',str(sc.get('time','')))
                 if m:
                     dur=max(2,(int(m.group(3))*60+int(m.group(4)))-(int(m.group(1))*60+int(m.group(2))))
                 f.write(f"file '{p}'\nduration {dur}\n")

@@ -165,6 +165,30 @@ def _autopilot_loop():
             print("CPA_AUTOPILOT_LOOP_ERROR", type(e).__name__, str(e))
         time.sleep(_AUTOPILOT_INTERVAL)
 
+def _mp4_selftest():
+    import os, shutil
+    try:
+        row = {
+            "id": 0,
+            "title": "CPA Factory MP4 self-test",
+            "script": "MP4 self-test",
+            "platform": "rutube",
+            "scenes": '[{"time":"00:00-00:02","text":"CPA Factory MP4 test"},{"time":"00:02-00:04","text":"FFmpeg OK"}]'
+        }
+        offer = {"id": 0, "name": "MP4 self-test", "price": 0, "cpa_rate": ""}
+        path, tmp = _make_mp4(0, row, offer)
+        size = os.path.getsize(path)
+        if size < 1000:
+            raise RuntimeError(f"MP4 too small: {size} bytes")
+        print("MP4_SELFTEST", json.dumps({"status":"ok","bytes":size}, ensure_ascii=False))
+        shutil.rmtree(tmp, ignore_errors=True)
+        try:
+            os.remove(path)
+        except Exception:
+            pass
+    except Exception as e:
+        print("MP4_SELFTEST", json.dumps({"status":"error","error":f"{type(e).__name__}: {e}"}, ensure_ascii=False))
+
 @app.on_event("startup")
 def startup():
     init()

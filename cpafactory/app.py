@@ -634,13 +634,13 @@ def _download_product_image(offer,tmp):
 
 def _tts_audio(text,out_path):
     try:
-        import asyncio, edge_tts
+        from gtts import gTTS
+    except Exception:
+        raise HTTPException(503,'Озвучка недоступна: не установлен gTTS')
+    try:
+        gTTS(text=text,lang='ru',slow=False).save(out_path)
     except Exception as e:
-        raise HTTPException(503,'Озвучка недоступна: не установлен edge-tts')
-    async def run():
-        communicate=edge_tts.Communicate(text,'ru-RU-DmitryNeural',rate='+8%',volume='+0%')
-        await communicate.save(out_path)
-    asyncio.run(run())
+        raise HTTPException(502,f'Ошибка генерации озвучки: {e}')
 
 def _make_scene_image(scene_text, product_path, index, total, font_path, tmp):
     im=Image.new('RGB',(720,1280),(14,16,22))

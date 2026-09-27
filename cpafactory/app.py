@@ -180,14 +180,14 @@ def _mp4_selftest():
         size = os.path.getsize(path)
         if size < 1000:
             raise RuntimeError(f"MP4 too small: {size} bytes")
-        print("MP4_SELFTEST", json.dumps({"status":"ok","bytes":size}, ensure_ascii=False))
+        print("MP4_SELFTEST", json.dumps({"status":"ok","bytes":size}, ensure_ascii=False), flush=True)
         shutil.rmtree(tmp, ignore_errors=True)
         try:
             os.remove(path)
         except Exception:
             pass
     except Exception as e:
-        print("MP4_SELFTEST", json.dumps({"status":"error","error":f"{type(e).__name__}: {e}"}, ensure_ascii=False))
+        print("MP4_SELFTEST", json.dumps({"status":"error","error":f"{type(e).__name__}: {e}"}, ensure_ascii=False), flush=True)
 
 @app.on_event("startup")
 def startup():

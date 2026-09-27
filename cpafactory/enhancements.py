@@ -12,7 +12,7 @@ def fetch_media(url):
         return out
     try:
         req=urllib.request.Request(str(url),headers={"User-Agent":"Mozilla/5.0 CPAFactory/1.0"})
-        with urllib.request.urlopen(req,timeout=15) as r:
+        with urllib.request.urlopen(req,timeout=6) as r:
             raw=r.read(1200000).decode("utf-8","ignore")
     except Exception:
         return out
@@ -60,7 +60,7 @@ def migrate():
 def enrich_existing():
     try:
         with core.db() as c:
-            rows=c.execute("select id,site_url,image_url,image_url2,video_url,video_url2 from offers where active=true limit 150").fetchall()
+            rows=c.execute("select id,site_url,image_url,image_url2,video_url,video_url2 from offers where active=true and (video_url is null or video_url='') order by id desc limit 20").fetchall()
             changed=0
             for r in rows:
                 if not r["site_url"]: continue

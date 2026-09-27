@@ -305,56 +305,103 @@ def seller_video(offer,tmp):
     return None
 
 _original_make=core._make_mp4
-def make_mp4_seller_first(content_id,row,offer):
-    # SQLite rows do not implement dict.get(). Normalize them before enhanced video processing.
-    if hasattr(row, "keys") and not isinstance(row, dict):
-        row = dict(row)
-    if hasattr(offer, "keys") and not isinstance(offer, dict):
-        offer = dict(offer)
-    # If seller video exists, use it as the visual source. Otherwise keep the proven generator.
-    if not (offer.get("video_url") or offer.get("video_url2") or offer.get("site_url")):
+def _ffmpeg_exe():
+    ff=shutil.which("ffmpeg")
+    if ff: return ff
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return None
+
+def _probe_duration(ff,path,default=10.0):
+    try:
+        p=subprocess.run([ff,"-i",path],capture_output=True,text=True,timeout=20)
+        m=re.search(r"Duration:\s*(\d+):(\d+):(\d+\.\d+)",p.stderr)
+        return float(m.group(1))*3600+float(m.group(2))*60+float(m.group(3)) if m else default
+    except Exception:
+        return default
+
+def _clean_image_video(content_id,row,offer,tmp,ff):
+    # No text overlays: use seller images with gentle zoom/pan as a fallback.
+    imgs=[offer.get("image_url"),offer.get("image_url2")]
+    paths=[]
+    for i,u in enumerate([x for x in imgs if x][:2]):
+        p=os.path.join(tmp,f"img_{i}.jpg")
+        if _download(str(u),p,12*1024*1024): paths.append(p)
+    if not paths:
         return _original_make(content_id,row,offer)
+    scenes=core.build_content_pack(row,offer)["scenes"]
+    parts=[]; durations=[]
+    for i,sc in enumerate(scenes,1):
+        text=core._video_text(sc.get("text","")); audio=os.path.join(tmp,f"a{i}.mp3")
+        try:
+            core._tts_audio(text,audio)
+            ad=_probe_duration(ff,audio,4.2)
+        except Exception:
+            audio=None; ad=4.2
+        dur=max(3.8,min(7.0,ad+0.25)); durations.append(dur)
+        src=paths[(i-1)%len(paths)]; seg=os.path.join(tmp,f"s{i}.mp4")
+        vf=("scale=1080:1920:force_original_aspect_ratio=increase,"
+            "crop=1080:1920,zoompan=z='min(zoom+0.0008,1.08)':"
+            "x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:"
+            "s=1080x1920:fps=30,format=yuv420p")
+        cmd=[ff,"-y","-loop","1","-i",src]
+        if audio: cmd += ["-i",audio]
+        cmd += ["-t",f"{dur:.2f}","-vf",vf,"-r","30","-map","0:v:0"]
+        if audio: cmd += ["-map","1:a:0"]
+        cmd += ["-c:v","libx264","-preset","veryfast","-crf","20"]
+        if audio: cmd += ["-c:a","aac","-b:a","160k","-shortest"]
+        cmd += ["-movflags","+faststart",seg]
+        subprocess.run(cmd,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=90)
+        parts.append(seg)
+    concat=os.path.join(tmp,"concat.txt")
+    with open(concat,"w",encoding="utf-8") as f:
+        for p in parts: f.write("file '"+p.replace("'","'\\''")+"'\n")
+    out=os.path.join(tmp,f"content_{content_id}.mp4")
+    subprocess.run([ff,"-y","-f","concat","-safe","0","-i",concat,"-c","copy","-movflags","+faststart",out],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=180)
+    return out,tmp
+
+def make_mp4_seller_first(content_id,row,offer):
+    if hasattr(row,"keys") and not isinstance(row,dict): row=dict(row)
+    if hasattr(offer,"keys") and not isinstance(offer,dict): offer=dict(offer)
     tmp=tempfile.mkdtemp(prefix="cfvideo_")
     try:
-        ff=shutil.which("ffmpeg")
-        if not ff:
-            try:
-                import imageio_ffmpeg; ff=imageio_ffmpeg.get_ffmpeg_exe()
-            except Exception: ff=None
+        ff=_ffmpeg_exe()
         if not ff: return _original_make(content_id,row,offer)
-        pack=core.build_content_pack(row,offer); scenes=pack["scenes"]
         video=seller_video(offer,tmp)
-        if not video: return _original_make(content_id,row,offer)
-        probe=subprocess.run([ff,"-i",video],capture_output=True,text=True,timeout=20)
-        m=re.search(r"Duration:\s*(\d+):(\d+):(\d+\.\d+)",probe.stderr)
-        vd=float(m.group(1))*3600+float(m.group(2))*60+float(m.group(3)) if m else 10
-        parts=[]; durations=[]
-        for i,sc in enumerate(scenes,1):
-            text=core._video_text(sc.get("text","")); audio=os.path.join(tmp,f"a{i}.mp3")
-            try:
-                core._tts_audio(text,audio)
-                pr=subprocess.run([ff,"-i",audio],capture_output=True,text=True,timeout=15)
-                am=re.search(r"Duration:\s*(\d+):(\d+):(\d+\.\d+)",pr.stderr)
-                ad=float(am.group(1))*3600+float(am.group(2))*60+float(am.group(3)) if am else 4.2
-            except Exception:
-                audio=None; ad=4.2
-            dur=max(3.8,min(6.0,ad+0.35)); durations.append(dur)
-            seg=os.path.join(tmp,f"s{i}.mp4")
-            off=0 if vd<=1 else ((i-1)*4.5)%max(vd-1,1)
-            cmd=[ff,"-y","-stream_loop","-1","-ss",f"{off:.2f}","-i",video]
-            if audio:
-                cmd += ["-i",audio,"-t",f"{dur:.2f}","-vf","scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,format=yuv420p","-r","24","-map","0:v:0","-map","1:a:0","-c:v","libx264","-preset","veryfast","-crf","23","-c:a","aac","-b:a","128k","-shortest",seg]
-            else:
-                cmd += ["-t",f"{dur:.2f}","-vf","scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,format=yuv420p","-r","24","-c:v","libx264","-preset","veryfast","-crf","23","-an",seg]
-            subprocess.run(cmd,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=60)
-            parts.append(seg)
-        concat=os.path.join(tmp,"concat.txt")
-        with open(concat,"w",encoding="utf-8") as f:
-            for p in parts: f.write(f"file '{p}'\n")
-        out=os.path.join(tmp,f"content_{content_id}.mp4")
-        subprocess.run([ff,"-y","-f","concat","-safe","0","-i",concat,"-c","copy","-movflags","+faststart",out],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=120)
-        print("VIDEO_BUILD",json.dumps({"content_id":content_id,"seller_video":True,"duration":round(sum(durations),1),"voice":True},ensure_ascii=False),flush=True)
-        return out,tmp
+        if video:
+            scenes=core.build_content_pack(row,offer)["scenes"]
+            parts=[]; durations=[]; vd=_probe_duration(ff,video,10)
+            for i,sc in enumerate(scenes,1):
+                text=core._video_text(sc.get("text","")); audio=os.path.join(tmp,f"a{i}.mp3")
+                try:
+                    core._tts_audio(text,audio); ad=_probe_duration(ff,audio,4.2)
+                except Exception:
+                    audio=None; ad=4.2
+                dur=max(3.8,min(7.0,ad+0.25)); durations.append(dur)
+                seg=os.path.join(tmp,f"s{i}.mp4")
+                off=0 if vd<=1 else ((i-1)*4.5)%max(vd-1,1)
+                cmd=[ff,"-y","-stream_loop","-1","-ss",f"{off:.2f}","-i",video]
+                cmd += ["-t",f"{dur:.2f}","-vf",
+                        "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,format=yuv420p",
+                        "-r","30","-map","0:v:0"]
+                if audio: cmd += ["-i",audio,"-map","1:a:0"]
+                cmd += ["-c:v","libx264","-preset","veryfast","-crf","20"]
+                if audio: cmd += ["-c:a","aac","-b:a","160k","-shortest"]
+                cmd += ["-movflags","+faststart",seg]
+                subprocess.run(cmd,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=120)
+                parts.append(seg)
+            concat=os.path.join(tmp,"concat.txt")
+            with open(concat,"w",encoding="utf-8") as f:
+                for p in parts: f.write("file '"+p.replace("'","'\\''")+"'\n")
+            out=os.path.join(tmp,f"content_{content_id}.mp4")
+            subprocess.run([ff,"-y","-f","concat","-safe","0","-i",concat,"-c","copy","-movflags","+faststart",out],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=240)
+            print("VIDEO_BUILD",json.dumps({"content_id":content_id,"seller_video":True,"resolution":"1080x1920","fps":30,"duration":round(sum(durations),1),"voice":"ru-RU-DmitryNeural","speech_rate":"+7%","text_overlay":False},ensure_ascii=False),flush=True)
+            return out,tmp
+        out,tmp2=_clean_image_video(content_id,row,offer,tmp,ff)
+        print("VIDEO_BUILD",json.dumps({"content_id":content_id,"seller_video":False,"resolution":"1080x1920","fps":30,"voice":"ru-RU-DmitryNeural","speech_rate":"+7%","text_overlay":False},ensure_ascii=False),flush=True)
+        return out,tmp2
     except Exception as e:
         print("SELLER_VIDEO_BUILD_ERROR",type(e).__name__,str(e),flush=True)
         shutil.rmtree(tmp,ignore_errors=True)

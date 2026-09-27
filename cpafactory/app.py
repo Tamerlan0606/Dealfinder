@@ -602,17 +602,17 @@ def _make_mp4(content_id, row, offer):
         font_paths=['/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf','/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf']
         font_path=next((p for p in font_paths if os.path.exists(p)),None)
         if not font_path: raise HTTPException(503,'Шрифт для MP4 не найден')
-        font=ImageFont.truetype(font_path,42); small=ImageFont.truetype(font_path,25)
+        font=ImageFont.truetype(font_path,32); small=ImageFont.truetype(font_path,20)
         files=[]
         for i,sc in enumerate(scenes):
-            im=Image.new('RGB',(720,1280),'white'); d=ImageDraw.Draw(im)
-            d.text((45,100), 'CPA FACTORY', font=small, fill='black')
+            im=Image.new('RGB',(540,960),'white'); d=ImageDraw.Draw(im)
+            d.text((32,70), 'CPA FACTORY', font=small, fill='black')
             lines=_wrap_lines(sc.get('text',''),28)
-            y=340
+            y=255
             for line in lines:
                 bbox=d.textbbox((0,0),line,font=font); w=bbox[2]-bbox[0]
-                d.text(((720-w)/2,y),line,font=font,fill='black'); y+=60
-            d.text((45,1165),f"Сцена {i+1}/{len(scenes)}",font=small,fill='black')
+                d.text(((540-w)/2,y),line,font=font,fill='black'); y+=46
+            d.text((32,870),f"Сцена {i+1}/{len(scenes)}",font=small,fill='black')
             path=os.path.join(tmp,f'{i:03d}.png'); im.save(path); files.append(path)
         concat=os.path.join(tmp,'concat.txt')
         with open(concat,'w',encoding='utf-8') as f:
@@ -624,7 +624,7 @@ def _make_mp4(content_id, row, offer):
                 f.write(f"file '{p}'\nduration {dur}\n")
             f.write(f"file '{files[-1]}'\n")
         out=os.path.join(tmp,f'content_{content_id}.mp4')
-        subprocess.run([ffmpeg,'-y','-f','concat','-safe','0','-i',concat,'-vf','scale=720:1280,format=yuv420p','-r','24','-c:v','libx264','-preset','ultrafast','-crf','28','-threads','1','-movflags','+faststart',out],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=90)
+        subprocess.run([ffmpeg,'-y','-f','concat','-safe','0','-i',concat,'-vf','scale=540:960,format=yuv420p','-r','15','-c:v','libx264','-preset','ultrafast','-crf','28','-threads','1','-movflags','+faststart',out],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=90)
         return out,tmp
     except subprocess.CalledProcessError as e:
         raise HTTPException(500,'Ошибка сборки MP4: '+e.stderr.decode('utf-8','ignore')[-500:])

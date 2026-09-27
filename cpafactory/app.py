@@ -225,10 +225,10 @@ def startup():
     except Exception as e:
         print("CPA_ENHANCEMENTS_MIGRATION_ERROR", type(e).__name__, str(e), flush=True)
 
-    if os.getenv("GDESLON_API_TOKEN", "").strip():
-        threading.Thread(target=_auto_gdeslon_import, daemon=True).start()
     if os.getenv("CPA_AUTOPILOT_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}:
-        threading.Thread(target=_autopilot_loop, daemon=True).start()
+        # One orchestrator owns imports + content generation. Running a separate
+        # GdeSlon importer in parallel caused UNIQUE conflicts on source/external_id.
+        threading.Thread(target=_autopilot_loop, daemon=True, name="cpa-autopilot").start()
 
 
 @app.get("/health")

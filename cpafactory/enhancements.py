@@ -245,6 +245,20 @@ def preview_video():
         raise HTTPException(404,"Готового preview-видео пока нет")
     return core.FileResponse(path,media_type="video/mp4",filename=f"cpafactory_preview_{_LAST_PREVIEW_VIDEO.get('content_id','video')}.mp4",content_disposition_type="inline")
 
+@core.app.get("/api/preview-video/ensure")
+def ensure_preview_video():
+    """Deterministic production-preview trigger. Never blocks the HTTP request."""
+    global _BOOT_STARTED
+    preview=_LAST_PREVIEW_VIDEO.get("path")
+    if preview and os.path.exists(preview):
+        return {"status":"ready","url":"/api/preview-video","content_id":_LAST_PREVIEW_VIDEO.get("content_id")}
+    with _BOOT_LOCK:
+        running=_BOOT_STARTED
+        if not running:
+            _BOOT_STARTED=True
+            threading.Thread(target=_deep_boot,daemon=True,name="cpa-preview-ensure").start()
+    return {"status":"building" if running or _BOOT_STARTED else "queued","status_url":"/api/preview-video/status"}
+
 @core.app.get("/api/preview-video/status")
 def preview_video_status():
     path=_LAST_PREVIEW_VIDEO.get("path")

@@ -567,11 +567,7 @@ def _deep_boot():
 
 @core.app.on_event("startup")
 def enhancement_startup():
+    # Startup is deliberately lightweight. Network imports, media crawling and
+    # MP4 generation must never be part of the web process boot path.
     print("CPA_ENHANCEMENTS_STARTED",json.dumps({"gdeslon":bool(os.getenv("GDESLON_API_TOKEN")),"yandex_market":bool(os.getenv("YANDEX_MARKET_OAUTH")),"wordstat":bool(os.getenv("YANDEX_SEARCH_API_KEY") and os.getenv("YANDEX_SEARCH_FOLDER_ID"))}),flush=True)
-    threading.Thread(target=_deep_boot,daemon=True,name="cpa-deep-boot").start()
-
-# Deterministic fallback: start the deep production test shortly after module import.
-# This avoids relying on FastAPI startup-hook registration when this enhancement module
-# is imported during app initialization. The lock inside _deep_boot prevents duplicates.
-# Deep production validation is triggered after a successful normal pipeline cycle.
 

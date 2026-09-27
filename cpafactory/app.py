@@ -150,7 +150,16 @@ def init():
         c.execute("create unique index if not exists uq_offers_source_external on offers(source,external_id) where external_id is not null")
 
 _AUTOPILOT_LOCK = threading.Lock()
-_VIDEO_JOBS = {}\n_VIDEO_JOBS_LOCK = threading.Lock()\n\ndef _video_progress(job_id, percent, stage):\n    with _VIDEO_JOBS_LOCK:\n        job = _VIDEO_JOBS.get(job_id)\n        if job:\n            job['progress'] = max(0, min(100, int(percent)))\n            job['stage'] = str(stage)
+_VIDEO_JOBS = {}
+_VIDEO_JOBS_LOCK = threading.Lock()
+
+def _video_progress(job_id, percent, stage):
+    with _VIDEO_JOBS_LOCK:
+        job = _VIDEO_JOBS.get(job_id)
+        if job:
+            job["progress"] = max(0, min(100, int(percent)))
+            job["stage"] = str(stage)
+
 _AUTOPILOT_INTERVAL = max(900, int(os.getenv("CPA_AUTOPILOT_INTERVAL", "3600") or 3600))
 
 def _autopilot_loop():
@@ -779,16 +788,28 @@ def build_content_pack(row, offer):
             "description":description,"cta":cta,"tracking_link":link,"scenes":scenes,
             "thumbnail_prompt":thumb,"voice_script":row["script"],"platform":row["platform"]}
 
-def _video_job_run(content_id:int, job_id:str):\n    tmp=None\n    try:\n        _video_progress(job_id, 2, 'Запуск генерации')\n        with db() as c:
+def _video_job_run(content_id:int, job_id:str):
+    tmp=None
+    try:
+        _video_progress(job_id, 2, "Запуск генерации")
+        with db() as c:
             row=c.execute("select * from content where id=%s",(content_id,)).fetchone()
             if not row: raise RuntimeError("Материал не найден")
             offer=c.execute("select * from offers where id=%s",(row["offer_id"],)).fetchone()
             if not offer: raise RuntimeError("Оффер не найден")
-        path,tmp=_make_mp4(content_id,row,offer)\n        _video_progress(job_id, 98, 'Финальная сборка')\n        _video_progress(job_id, 98, 'Финальная сборка')\n        with _VIDEO_JOBS_LOCK:\n            _VIDEO_JOBS[job_id]={"status":"ready","content_id":content_id,"path":path,"tmp":tmp,"progress":100,"stage":"Видео готово"}
+        _video_progress(job_id, 5, "Подготовка материалов")
+        globals()["_VIDEO_PROGRESS_CALLBACK"] = lambda percent, stage: _video_progress(job_id, percent, stage)
+        try:
+            path,tmp=_make_mp4(content_id,row,offer)
+        finally:
+            globals().pop("_VIDEO_PROGRESS_CALLBACK", None)
+        _video_progress(job_id, 98, "Финальная сборка")
+        with _VIDEO_JOBS_LOCK:
+            _VIDEO_JOBS[job_id]={"status":"ready","content_id":content_id,"path":path,"tmp":tmp,"progress":100,"stage":"Видео готово"}
     except Exception as e:
         if tmp: shutil.rmtree(tmp,ignore_errors=True)
         with _VIDEO_JOBS_LOCK:
-            _VIDEO_JOBS[job_id]={"status":"error","content_id":content_id,"error":f"{type(e).__name__}: {e}"}
+            _VIDEO_JOBS[job_id]={"status":"error","content_id":content_id,"error":f"{type(e).__name__}: {e}","progress":0,"stage":"Ошибка"}
 
 @app.get("/api/content/{content_id}/mp4")
 def content_mp4(content_id:int):

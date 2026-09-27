@@ -482,14 +482,19 @@ def _deep_boot():
         _BOOT_STARTED = True
     try:
         import time
+        # Boot self-test must never run the full commercial pipeline. The
+        # pipeline already has its own worker; mixing the two caused long
+        # startup races and could terminate the Render instance before the
+        # preview was created.
         migrate()
-        time.sleep(5)
+        time.sleep(10)
         enrich_existing()
-        result=pipeline_with_demand()
-        print("CPA_BOOT_PIPELINE",json.dumps(result,ensure_ascii=False,default=str),flush=True)
+
         ff=_ffmpeg_exe()
         if not ff:
             raise RuntimeError("ffmpeg недоступен")
+
+        # Validate production TTS independently from the content pipeline.
         tdir=tempfile.mkdtemp(prefix="cftest_tts_")
         try:
             audio=os.path.join(tdir,"voice_test.mp3")
@@ -498,18 +503,45 @@ def _deep_boot():
                 raise RuntimeError("Edge TTS не создал корректный MP3")
         finally:
             shutil.rmtree(tdir,ignore_errors=True)
-        test=mp4_selftest()
-        if test.get("status")!="ok":
+
+        # Wait for the normal autopilot to create content, then build a real
+        # product preview from that content. Never block the web startup path.
+        test=None
+        for attempt in range(1,7):
+            test=mp4_selftest()
+            if test.get("status") == "ok":
+                break
+            if test.get("status") == "no_content":
+                print("CPA_PREVIEW_WAIT",json.dumps({"attempt":attempt,"reason":"no_content"},ensure_ascii=False),flush=True)
+                time.sleep(10)
+                continue
+            break
+
+        if not test or test.get("status") != "ok":
             raise RuntimeError("MP4 self-test failed: "+str(test))
+
         preview=_LAST_PREVIEW_VIDEO.get("path")
         if not preview or not os.path.exists(preview):
             raise RuntimeError("Preview MP4 отсутствует после self-test")
+
         p=subprocess.run([ff,"-v","error","-i",preview,"-f","null","-"],capture_output=True,text=True,timeout=180)
         if p.returncode!=0:
             raise RuntimeError("MP4 decode failed: "+p.stderr[-1000:])
-        print("CPA_DEEP_PRODUCTION_TEST",json.dumps({"status":"ok","content_id":test.get("content_id"),"bytes":test.get("bytes"),"ffmpeg":ff,"voice":"ru-RU-DmitryNeural","mp4_decode":"ok","preview":"/api/preview-video"},ensure_ascii=False),flush=True)
+
+        print("CPA_DEEP_PRODUCTION_TEST",json.dumps({
+            "status":"ok",
+            "content_id":test.get("content_id"),
+            "bytes":test.get("bytes"),
+            "ffmpeg":ff,
+            "voice":"ru-RU-DmitryNeural",
+            "mp4_decode":"ok",
+            "preview":"/api/preview-video"
+        },ensure_ascii=False),flush=True)
     except Exception as e:
-        print("CPA_DEEP_PRODUCTION_TEST",json.dumps({"status":"error","error":f"{type(e).__name__}: {e}"},ensure_ascii=False),flush=True)
+        print("CPA_DEEP_PRODUCTION_TEST",json.dumps({
+            "status":"error",
+            "error":f"{type(e).__name__}: {e}"
+        },ensure_ascii=False),flush=True)
 
 @core.app.on_event("startup")
 def enhancement_startup():

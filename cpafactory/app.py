@@ -1,4 +1,4 @@
-import os, re, sqlite3, json, urllib.request, urllib.parse, tempfile, subprocess, shutil, textwrap, zipfile, io, html
+import os, re, sqlite3, json, urllib.request, urllib.parse, tempfile, subprocess, shutil, textwrap, zipfile, io, html, threading
 from urllib.parse import urlencode, urlparse, parse_qsl, urlunparse
 from fastapi import FastAPI, Request, HTTPException, Header
 from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse, StreamingResponse
@@ -147,6 +147,8 @@ def init():
 @app.on_event("startup")
 def startup():
     init()
+    if os.getenv("GDESLON_API_TOKEN", "").strip():
+        threading.Thread(target=_auto_gdeslon_import, daemon=True).start()
 
 @app.get("/health")
 def health():
@@ -330,6 +332,13 @@ def cpa_diagnostic(token: str | None = None):
     except Exception as e:
         result["error"]=f"{type(e).__name__}: {e}"
     return result
+
+def _auto_gdeslon_import():
+    try:
+        result = cpa_import_gdeslon(ADMIN_TOKEN or None)
+        print("GDESLON_AUTO_IMPORT", json.dumps(result, ensure_ascii=False, default=str))
+    except Exception as e:
+        print("GDESLON_AUTO_IMPORT_ERROR", type(e).__name__, str(e))
 
 def _count_active_offers():
     with db() as c:

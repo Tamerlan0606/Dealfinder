@@ -207,6 +207,15 @@ def _mp4_selftest():
 @app.on_event("startup")
 def startup():
     init()
+
+    # Enhancement schema must exist before any importer/autopilot thread starts.
+    # Previously GdeSlon could race startup and hit missing video/demand columns.
+    try:
+        import enhancements
+        enhancements.migrate()
+    except Exception as e:
+        print("CPA_ENHANCEMENTS_MIGRATION_ERROR", type(e).__name__, str(e), flush=True)
+
     if os.getenv("GDESLON_API_TOKEN", "").strip():
         threading.Thread(target=_auto_gdeslon_import, daemon=True).start()
     if os.getenv("CPA_AUTOPILOT_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}:

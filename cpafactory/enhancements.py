@@ -78,12 +78,13 @@ def enrich_existing():
 
 def wordstat_count(phrase):
     token=os.getenv("YANDEX_SEARCH_API_KEY","").strip()
-    if not token or not phrase:
+    folder_id=os.getenv("YANDEX_SEARCH_FOLDER_ID","").strip()
+    if not token or not phrase or not folder_id:
         return 0
     try:
         regions=[x.strip() for x in os.getenv("YANDEX_WORDSTAT_REGIONS","").split(",") if x.strip()]
         devices=[x.strip() for x in os.getenv("YANDEX_WORDSTAT_DEVICES","DEVICE_PHONE").split(",") if x.strip()]
-        body={"phrase":str(phrase)[:300],"numPhrases":50}
+        body={"phrase":str(phrase)[:300],"numPhrases":50,"folderId":folder_id}
         if regions: body["regions"]=regions
         if devices: body["devices"]=devices
         req=urllib.request.Request(
@@ -102,7 +103,7 @@ def wordstat_count(phrase):
         return 0
 
 def refresh_demand(limit=30):
-    if not os.getenv("YANDEX_SEARCH_API_KEY","").strip():
+    if not os.getenv("YANDEX_SEARCH_API_KEY","").strip() or not os.getenv("YANDEX_SEARCH_FOLDER_ID","").strip():
         return {"status":"not_configured","checked":0}
     with core.db() as c:
         rows=c.execute("select id,name from offers where active=true order by id desc limit %s",(max(1,min(limit,100)),)).fetchall()
@@ -300,7 +301,7 @@ def enhanced_status():
       "admitad_configured":bool(os.getenv("ADMITAD_ACCESS_TOKEN") and os.getenv("ADMITAD_WEBSITE_ID")),
       "gdeslon_configured":bool(os.getenv("GDESLON_API_TOKEN")),
       "yandex_market_configured":bool(os.getenv("YANDEX_MARKET_OAUTH") and (os.getenv("YANDEX_MARKET_PLACE_ID") or os.getenv("YANDEX_MARKET_CLID"))),
-      "wordstat_configured":bool(os.getenv("YANDEX_WORDSTAT_OAUTH")),
+      "wordstat_configured":bool(os.getenv("YANDEX_SEARCH_API_KEY") and os.getenv("YANDEX_SEARCH_FOLDER_ID")),
       "active_offers":active
     }
 
@@ -321,5 +322,5 @@ def enhancement_startup():
     print("CPA_ENHANCEMENTS_STARTED",json.dumps({
       "gdeslon":bool(os.getenv("GDESLON_API_TOKEN")),
       "yandex_market":bool(os.getenv("YANDEX_MARKET_OAUTH")),
-      "wordstat":bool(os.getenv("YANDEX_WORDSTAT_OAUTH"))
+      "wordstat":bool(os.getenv("YANDEX_SEARCH_API_KEY") and os.getenv("YANDEX_SEARCH_FOLDER_ID"))
     }),flush=True)

@@ -1052,3 +1052,10 @@ def home_head():
 @app.get("/")
 def home():
     return HTMLResponse(PAGE)
+
+
+# Load optional production integrations after all core routes/functions are defined.
+try:
+    import enhancements
+except Exception as e:
+    print("CPA_ENHANCEMENTS_IMPORT_ERROR", type(e).__name__, str(e), flush=True)

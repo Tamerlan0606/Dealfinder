@@ -11,16 +11,9 @@ try:
 except Exception:
     pass
 
-def _boot():
-    try:
-        import app
-        import enhancements
-        print("CPA_ENHANCEMENTS_BOOT_OK", flush=True)
-    except Exception as e:
-        print("CPA_ENHANCEMENTS_BOOT_ERROR", type(e).__name__, str(e), flush=True)
-
 try:
-    import threading
-    threading.Timer(1, _boot).start()
+    import app
+    import enhancements
+    print("CPA_ENHANCEMENTS_BOOT_OK", flush=True)
 except Exception as e:
-    print("CPA_ENHANCEMENTS_TIMER_ERROR", type(e).__name__, str(e), flush=True)
+    print("CPA_ENHANCEMENTS_BOOT_ERROR", type(e).__name__, str(e), flush=True)

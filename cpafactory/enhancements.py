@@ -243,6 +243,11 @@ def seller_video(offer,tmp):
 
 _original_make=core._make_mp4
 def make_mp4_seller_first(content_id,row,offer):
+    # SQLite rows do not implement dict.get(). Normalize them before enhanced video processing.
+    if hasattr(row, "keys") and not isinstance(row, dict):
+        row = dict(row)
+    if hasattr(offer, "keys") and not isinstance(offer, dict):
+        offer = dict(offer)
     # If seller video exists, use it as the visual source. Otherwise keep the proven generator.
     if not (offer.get("video_url") or offer.get("video_url2") or offer.get("site_url")):
         return _original_make(content_id,row,offer)

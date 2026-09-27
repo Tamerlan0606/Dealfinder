@@ -281,8 +281,16 @@ def enhanced_status():
 @core.app.on_event("startup")
 def enhancement_startup():
     migrate()
-    threading.Thread(target=enrich_existing,daemon=True).start()
+    def _source_boot():
+        try:
+            if os.getenv("GDESLON_API_TOKEN","").strip():
+                core._auto_gdeslon_import()
+            enrich_existing()
+        except Exception as e:
+            print("CPA_SOURCE_BOOT_ERROR",type(e).__name__,str(e),flush=True)
+    threading.Thread(target=_source_boot,daemon=True).start()
     print("CPA_ENHANCEMENTS_STARTED",json.dumps({
+      "gdeslon":bool(os.getenv("GDESLON_API_TOKEN")),
       "yandex_market":bool(os.getenv("YANDEX_MARKET_OAUTH")),
       "wordstat":bool(os.getenv("YANDEX_WORDSTAT_OAUTH"))
     }),flush=True)

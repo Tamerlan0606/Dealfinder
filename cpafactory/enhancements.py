@@ -503,9 +503,27 @@ def _deep_boot():
             raise RuntimeError("ffmpeg недоступен")
         print("CPA_DEEP_BOOT_STAGE",json.dumps({"stage":"ffmpeg_ok","ffmpeg":ff},ensure_ascii=False),flush=True)
 
-        # Do not run database migration, demand refresh or GdeSlon network
-        # enrichment here. Those are commercial workers and can take minutes.
-        # The production video self-test must be isolated from them.
+        # Wait briefly for the importer to populate offers. If content is
+        # still absent, run one normal pipeline cycle ourselves so the
+        # production preview is built from a real product, not a dummy file.
+        import time
+        for wait_no in range(1,7):
+            with core.db() as c:
+                offer_count=int(c.execute("select count(*) n from offers where active=true").fetchone()["n"])
+                content_count=int(c.execute("select count(*) n from content").fetchone()["n"])
+            print("CPA_DEEP_DATA_STATE",json.dumps({"offer_count":offer_count,"content_count":content_count,"wait":wait_no},ensure_ascii=False),flush=True)
+            if content_count > 0:
+                break
+            if offer_count > 0:
+                try:
+                    result=core._pipeline_run()
+                    print("CPA_DEEP_PIPELINE",json.dumps(result,ensure_ascii=False,default=str),flush=True)
+                except Exception as e:
+                    print("CPA_DEEP_PIPELINE_ERROR",type(e).__name__,str(e),flush=True)
+                time.sleep(3)
+                break
+            time.sleep(5)
+
         test=None
         for attempt in range(1,9):
             print("CPA_DEEP_BOOT_STAGE",json.dumps({"stage":"video_build","attempt":attempt},ensure_ascii=False),flush=True)

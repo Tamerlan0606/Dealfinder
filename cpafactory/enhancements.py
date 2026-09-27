@@ -496,32 +496,19 @@ def _deep_boot():
         _BOOT_STARTED = True
     try:
         import time
-        # Boot self-test must never run the full commercial pipeline. The
-        # pipeline already has its own worker; mixing the two caused long
-        # startup races and could terminate the Render instance before the
-        # preview was created.
-        migrate()
-        time.sleep(10)
-        enrich_existing()
+        print("CPA_DEEP_BOOT_STAGE",json.dumps({"stage":"start"},ensure_ascii=False),flush=True)
 
         ff=_ffmpeg_exe()
         if not ff:
             raise RuntimeError("ffmpeg недоступен")
+        print("CPA_DEEP_BOOT_STAGE",json.dumps({"stage":"ffmpeg_ok","ffmpeg":ff},ensure_ascii=False),flush=True)
 
-        # Validate production TTS independently from the content pipeline.
-        tdir=tempfile.mkdtemp(prefix="cftest_tts_")
-        try:
-            audio=os.path.join(tdir,"voice_test.mp3")
-            _edge_tts_audio("Проверка производственной озвучки CPA Factory.",audio)
-            if not os.path.exists(audio) or os.path.getsize(audio)<1000:
-                raise RuntimeError("Edge TTS не создал корректный MP3")
-        finally:
-            shutil.rmtree(tdir,ignore_errors=True)
-
-        # Wait for the normal autopilot to create content, then build a real
-        # product preview from that content. Never block the web startup path.
+        # Do not run database migration, demand refresh or GdeSlon network
+        # enrichment here. Those are commercial workers and can take minutes.
+        # The production video self-test must be isolated from them.
         test=None
-        for attempt in range(1,7):
+        for attempt in range(1,9):
+            print("CPA_DEEP_BOOT_STAGE",json.dumps({"stage":"video_build","attempt":attempt},ensure_ascii=False),flush=True)
             test=mp4_selftest()
             if test.get("status") == "ok":
                 break
@@ -538,6 +525,7 @@ def _deep_boot():
         if not preview or not os.path.exists(preview):
             raise RuntimeError("Preview MP4 отсутствует после self-test")
 
+        print("CPA_DEEP_BOOT_STAGE",json.dumps({"stage":"decode_check"},ensure_ascii=False),flush=True)
         p=subprocess.run([ff,"-v","error","-i",preview,"-f","null","-"],capture_output=True,text=True,timeout=180)
         if p.returncode!=0:
             raise RuntimeError("MP4 decode failed: "+p.stderr[-1000:])

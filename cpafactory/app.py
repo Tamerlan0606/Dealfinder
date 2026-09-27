@@ -331,11 +331,16 @@ def cpa_diagnostic(token: str | None = None):
         result["error"]=f"{type(e).__name__}: {e}"
     return result
 
+def _count_active_offers():
+    with db() as c:
+        return c.execute("select count(*) n from offers where active=true").fetchone()["n"]
+
 @app.get("/api/cpa/status")
 def cpa_status():
     return {
         "admitad_configured":bool(os.getenv("ADMITAD_ACCESS_TOKEN") and os.getenv("ADMITAD_WEBSITE_ID")),
-        "gdeslon_configured":bool(os.getenv("GDESLON_API_TOKEN"))
+        "gdeslon_configured":bool(os.getenv("GDESLON_API_TOKEN")),
+        "active_offers": int(_count_active_offers())
     }
 
 @app.get("/api/cpa/top")
@@ -757,8 +762,11 @@ table{width:100%;border-collapse:collapse;font-size:14px}td,th{text-align:left;p
 .small{font-size:12px}.ok{color:#16803c}@media(max-width:700px){.grid{grid-template-columns:repeat(2,1fr)}table{display:block;overflow:auto;white-space:nowrap}}
 </style></head><body><main>
 <div class="card"><h1>CPA Factory</h1><div class="muted">Оффер → трекинг → контент → очередь публикации → аналитика</div>
-<div class="small muted">Admitad: <span id="cpaStatus">проверка…</span></div><div style="margin-top:10px"><b>Автопилот:</b> <span id="pipelineStatus">проверка…</span>
+<div class="small muted">GdeSlon XML API: <span id="gdeslonStatus">проверка…</span> · офферов: <span id="offerCount">0</span></div>
+<div class="small muted">Admitad: <span id="cpaStatus">опционально</span></div>
+<div style="margin-top:10px"><b>Автопилот:</b> <span id="pipelineStatus">проверка…</span>
 <button onclick="runPipeline()">Запустить цикл</button></div>
+<button onclick="importGdeSlon()">Обновить офферы из GdeSlon</button>
 <button onclick="importCPA()">Обновить офферы из Admitad</button>
 <button onclick="showTop()">Показать приоритетные офферы</button>
 <div id="topOffers"></div>
@@ -783,7 +791,10 @@ table{width:100%;border-collapse:collapse;font-size:14px}td,th{text-align:left;p
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 async function load(){
  let o=await (await fetch('/api/offers')).json(), c=await (await fetch('/api/content')).json(), s=await (await fetch('/api/stats')).json();
- let cs=await (await fetch('/api/cpa/status')).json(); cpaStatus.textContent=cs.admitad_configured?'подключён':'нужна авторизация';
+ let cs=await (await fetch('/api/cpa/status')).json();
+ gdeslonStatus.textContent=cs.gdeslon_configured?'подключён':'не настроен';
+ cpaStatus.textContent=cs.admitad_configured?'подключён':'не подключён';
+ offerCount.textContent=Number(cs.active_offers||0);
  m1.textContent=s.offers;m2.textContent=s.content;m3.textContent=s.clicks;m4.textContent=Number(s.revenue||0).toLocaleString('ru-RU')+' ₽';
  offerSelect.innerHTML=o.map(x=>'<option value="'+x.id+'">'+esc(x.name)+'</option>').join('');
  offers.innerHTML=o.length?'<table><tr><th>Товар</th><th>Сеть</th><th>Цена</th><th>Комиссия</th><th>Переходы</th></tr>'+
@@ -808,6 +819,14 @@ async function adminFetch(url,opts={}){
  if(r.status===401){localStorage.removeItem('cf_admin_token'); alert('Неверный токен администратора.');}
  return r;
 }
+async function importGdeSlon(){
+ let r=await adminFetch('/api/cpa/import/gdeslon');
+ let x=await r.json().catch(()=>({}));
+ if(x.status==='not_configured'){alert('GdeSlon не настроен в Render.');return;}
+ if(!r.ok){alert(x.detail||'Ошибка импорта GdeSlon');return;}
+ alert('GdeSlon: получено '+(x.received||0)+', добавлено '+(x.added||0)+', обновлено '+(x.updated||0)+'.');
+ load(); refreshPipelineStatus();
+}
 async function importCPA(){
  let r=await adminFetch('/api/cpa/import');
  let x=await r.json().catch(()=>({}));
@@ -825,13 +844,15 @@ async function refreshPipelineStatus(){
  try{
   let p=await (await fetch('/api/pipeline/status')).json();
   if(p.last_run){pipelineStatus.textContent=p.last_run.status==='ok'?'готов: материал в очереди':p.last_run.message||p.last_run.status;}
-  else pipelineStatus.textContent=p.admitad_configured?'готов к запуску':'нужна авторизация Admitad';
+  else if(p.gdeslon_configured) pipelineStatus.textContent='готов к запуску через GdeSlon';
+  else if(p.admitad_configured) pipelineStatus.textContent='готов к запуску через Admitad';
+  else pipelineStatus.textContent='нет подключённой CPA-сети';
  }catch(e){pipelineStatus.textContent='ошибка проверки';}
 }
 async function runPipeline(){
  let r=await adminFetch('/api/pipeline/run',{method:'POST'});
  let x=await r.json().catch(()=>({}));
- if(x.status==='not_configured'){alert('Admitad пока не подключён. Сначала нужен API-токен и ID площадки.');return;}
+ if(x.status==='not_configured'){alert('Не подключена ни одна CPA-сеть: GdeSlon или Admitad.');return;}
  if(!r.ok){alert(x.detail||x.message||'Ошибка автопилота');return;}
  alert(x.status==='skipped'?'Свежий материал уже существует.':'Готово: оффер выбран, материал создан и поставлен в очередь RUTUBE.');
  load(); refreshPipelineStatus();

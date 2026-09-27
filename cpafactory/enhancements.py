@@ -471,22 +471,50 @@ def enhanced_status():
       "active_offers":active
     }
 
+_BOOT_LOCK = threading.Lock()
+_BOOT_STARTED = False
+
+def _deep_boot():
+    global _BOOT_STARTED
+    with _BOOT_LOCK:
+        if _BOOT_STARTED:
+            return
+        _BOOT_STARTED = True
+    try:
+        import time
+        migrate()
+        time.sleep(5)
+        enrich_existing()
+        result=pipeline_with_demand()
+        print("CPA_BOOT_PIPELINE",json.dumps(result,ensure_ascii=False,default=str),flush=True)
+        ff=_ffmpeg_exe()
+        if not ff:
+            raise RuntimeError("ffmpeg недоступен")
+        tdir=tempfile.mkdtemp(prefix="cftest_tts_")
+        try:
+            audio=os.path.join(tdir,"voice_test.mp3")
+            _edge_tts_audio("Проверка производственной озвучки CPA Factory.",audio)
+            if not os.path.exists(audio) or os.path.getsize(audio)<1000:
+                raise RuntimeError("Edge TTS не создал корректный MP3")
+        finally:
+            shutil.rmtree(tdir,ignore_errors=True)
+        test=mp4_selftest()
+        if test.get("status")!="ok":
+            raise RuntimeError("MP4 self-test failed: "+str(test))
+        preview=_LAST_PREVIEW_VIDEO.get("path")
+        if not preview or not os.path.exists(preview):
+            raise RuntimeError("Preview MP4 отсутствует после self-test")
+        p=subprocess.run([ff,"-v","error","-i",preview,"-f","null","-"],capture_output=True,text=True,timeout=180)
+        if p.returncode!=0:
+            raise RuntimeError("MP4 decode failed: "+p.stderr[-1000:])
+        print("CPA_DEEP_PRODUCTION_TEST",json.dumps({"status":"ok","content_id":test.get("content_id"),"bytes":test.get("bytes"),"ffmpeg":ff,"voice":"ru-RU-DmitryNeural","mp4_decode":"ok","preview":"/api/preview-video"},ensure_ascii=False),flush=True)
+    except Exception as e:
+        print("CPA_DEEP_PRODUCTION_TEST",json.dumps({"status":"error","error":f"{type(e).__name__}: {e}"},ensure_ascii=False),flush=True)
+
 @core.app.on_event("startup")
 def enhancement_startup():
-    migrate()
-    def _source_boot():
-        import time
-        try:
-            time.sleep(20)
-            enrich_existing()
-            result=pipeline_with_demand()
-            print("CPA_BOOT_PIPELINE",json.dumps(result,ensure_ascii=False,default=str),flush=True)
-            mp4_selftest()
-        except Exception as e:
-            print("CPA_BOOT_PIPELINE_ERROR",type(e).__name__,str(e),flush=True)
-    threading.Thread(target=_source_boot,daemon=True).start()
-    print("CPA_ENHANCEMENTS_STARTED",json.dumps({
-      "gdeslon":bool(os.getenv("GDESLON_API_TOKEN")),
-      "yandex_market":bool(os.getenv("YANDEX_MARKET_OAUTH")),
-      "wordstat":bool(os.getenv("YANDEX_SEARCH_API_KEY") and os.getenv("YANDEX_SEARCH_FOLDER_ID"))
-    }),flush=True)
+    print("CPA_ENHANCEMENTS_STARTED",json.dumps({"gdeslon":bool(os.getenv("GDESLON_API_TOKEN")),"yandex_market":bool(os.getenv("YANDEX_MARKET_OAUTH")),"wordstat":bool(os.getenv("YANDEX_SEARCH_API_KEY") and os.getenv("YANDEX_SEARCH_FOLDER_ID"))}),flush=True)
+    threading.Thread(target=_deep_boot,daemon=True,name="cpa-deep-boot").start()
+
+# Compatibility fallback for runtimes that skip startup callbacks.
+threading.Timer(15.0,_deep_boot).start()

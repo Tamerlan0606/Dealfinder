@@ -144,11 +144,33 @@ def init():
             c.execute("alter table content add column if not exists thumbnail_prompt text")
         c.execute("create unique index if not exists uq_offers_source_external on offers(source,external_id) where external_id is not null")
 
+_AUTOPILOT_LOCK = threading.Lock()
+_AUTOPILOT_INTERVAL = max(900, int(os.getenv("CPA_AUTOPILOT_INTERVAL", "3600") or 3600))
+
+def _autopilot_loop():
+    import time
+    time.sleep(30)
+    while True:
+        try:
+            if _AUTOPILOT_LOCK.acquire(blocking=False):
+                try:
+                    result = _pipeline_run()
+                    print("CPA_AUTOPILOT", json.dumps(result, ensure_ascii=False, default=str))
+                except Exception as e:
+                    print("CPA_AUTOPILOT_ERROR", type(e).__name__, str(e))
+                finally:
+                    _AUTOPILOT_LOCK.release()
+        except Exception as e:
+            print("CPA_AUTOPILOT_LOOP_ERROR", type(e).__name__, str(e))
+        time.sleep(_AUTOPILOT_INTERVAL)
+
 @app.on_event("startup")
 def startup():
     init()
     if os.getenv("GDESLON_API_TOKEN", "").strip():
         threading.Thread(target=_auto_gdeslon_import, daemon=True).start()
+    if os.getenv("CPA_AUTOPILOT_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}:
+        threading.Thread(target=_autopilot_loop, daemon=True).start()
 
 @app.get("/health")
 def health():
@@ -365,13 +387,17 @@ def cpa_top(limit: int = 10):
         epc=float(r["epc"] or 0)
         cr=float(r["cr"] or 0)
         rating=float(r["rating"] or 0)
+        clicks=int(r["clicks"] or 0)
+        price=float(r["price"] or 0)
         score=(__import__("math").log1p(max(epc,0))*0.55
                + min(max(cr,0),100)*0.30
-               + min(max(rating,0),5)*0.15)
+               + min(max(rating,0),5)*0.15
+               + min(clicks,1000)*0.002
+               + (0.001 if price > 0 else 0))
         x=dict(r)
         x["score"]=round(score,4)
         out.append(x)
-    out.sort(key=lambda x:(x["score"],float(x.get("epc") or 0),float(x.get("cr") or 0)),reverse=True)
+    out.sort(key=lambda x:(x["score"],float(x.get("epc") or 0),float(x.get("cr") or 0),int(x.get("clicks") or 0),int(x.get("id") or 0)),reverse=True)
     return out[:limit]
 
 @app.get("/api/cpa/cron-import-gdeslon")

@@ -284,10 +284,12 @@ def enhancement_startup():
     def _source_boot():
         import time
         try:
-            time.sleep(8)
+            time.sleep(20)
             enrich_existing()
+            result=pipeline_with_demand()
+            print("CPA_BOOT_PIPELINE",json.dumps(result,ensure_ascii=False,default=str),flush=True)
         except Exception as e:
-            print("CPA_MEDIA_BOOT_ERROR",type(e).__name__,str(e),flush=True)
+            print("CPA_BOOT_PIPELINE_ERROR",type(e).__name__,str(e),flush=True)
     threading.Thread(target=_source_boot,daemon=True).start()
     print("CPA_ENHANCEMENTS_STARTED",json.dumps({
       "gdeslon":bool(os.getenv("GDESLON_API_TOKEN")),

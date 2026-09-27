@@ -569,16 +569,106 @@ def _video_text(s):
     s=re.sub(r'\s+',' ',str(s or '')).strip()
     return s
 
-def _wrap_lines(text, width=30):
+def _wrap_lines(text, font, max_width, draw):
     words=_video_text(text).split()
     lines=[]; cur=''
     for w in words:
-        if len(cur)+len(w)+(1 if cur else 0)<=width: cur=(cur+' '+w).strip()
+        test=(cur+' '+w).strip()
+        if not cur or draw.textbbox((0,0),test,font=font)[2] <= max_width:
+            cur=test
         else:
-            if cur: lines.append(cur)
-            cur=w
+            lines.append(cur); cur=w
     if cur: lines.append(cur)
     return lines
+
+def _fit_font(text, font_path, max_size, min_size, max_width, max_height, draw):
+    size=max_size
+    while size >= min_size:
+        f=ImageFont.truetype(font_path,size)
+        lines=_wrap_lines(text,f,max_width,draw)
+        bbox=draw.textbbox((0,0),'Ag',font=f)
+        line_h=bbox[3]-bbox[1]+10
+        if len(lines)*line_h <= max_height:
+            return f,lines,line_h
+        size-=2
+    f=ImageFont.truetype(font_path,min_size)
+    return f,_wrap_lines(text,f,max_width,draw),max(28,min_size+10)
+
+def _download_product_image(offer,tmp):
+    urls=[]
+    for key in ('image_url','image_url2'):
+        u=offer.get(key)
+        if u and str(u).startswith(('http://','https://')): urls.append(str(u))
+    # Last-resort: try the product/landing page and extract og:image.
+    if not urls and offer.get('site_url'):
+        try:
+            req=urllib.request.Request(str(offer['site_url']),headers={'User-Agent':'Mozilla/5.0 CPAFactory/1.0'})
+            with urllib.request.urlopen(req,timeout=10) as r:
+                raw=r.read(400000).decode('utf-8','ignore')
+            m=re.search(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']',raw,re.I)
+            if not m:
+                m=re.search(r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',raw,re.I)
+            if m: urls.append(urllib.parse.urljoin(str(offer['site_url']),html.unescape(m.group(1))))
+        except Exception:
+            pass
+    if not urls: return None
+    try:
+        req=urllib.request.Request(urls[0],headers={'User-Agent':'Mozilla/5.0 CPAFactory/1.0'})
+        with urllib.request.urlopen(req,timeout=15) as r:
+            data=r.read(5*1024*1024)
+        path=os.path.join(tmp,'product.jpg')
+        with open(path,'wb') as f: f.write(data)
+        im=Image.open(path).convert('RGB')
+        im.thumbnail((760,760),Image.Resampling.LANCZOS)
+        canvas=Image.new('RGB',(760,760),'white')
+        canvas.paste(im,((760-im.width)//2,(760-im.height)//2))
+        canvas.save(path,'JPEG',quality=92)
+        return path
+    except Exception:
+        return None
+
+def _tts_audio(text,out_path):
+    try:
+        import asyncio, edge_tts
+    except Exception as e:
+        raise HTTPException(503,'Озвучка недоступна: не установлен edge-tts')
+    async def run():
+        communicate=edge_tts.Communicate(text,'ru-RU-DmitryNeural',rate='+8%',volume='+0%')
+        await communicate.save(out_path)
+    asyncio.run(run())
+
+def _make_scene_image(scene_text, product_path, index, total, font_path, tmp):
+    im=Image.new('RGB',(720,1280),(14,16,22))
+    d=ImageDraw.Draw(im)
+    # Premium card background and hierarchy.
+    d.rounded_rectangle((28,28,692,1252),radius=34,fill=(24,27,36))
+    d.text((58,58),'CPA FACTORY',font=ImageFont.truetype(font_path,22),fill=(190,196,208))
+    if product_path and os.path.exists(product_path):
+        try:
+            p=Image.open(product_path).convert('RGB')
+            p.thumbnail((590,590),Image.Resampling.LANCZOS)
+            card=(65,125,655,715)
+            d.rounded_rectangle(card,radius=28,fill=(255,255,255))
+            x=card[0]+(card[2]-card[0]-p.width)//2
+            y=card[1]+(card[3]-card[1]-p.height)//2
+            im.paste(p,(x,y))
+        except Exception:
+            pass
+    d.rounded_rectangle((58,750,662,1135),radius=28,fill=(34,38,50))
+    font,lines,line_h=_fit_font(scene_text,font_path,48,28,550,310,d)
+    total_h=len(lines)*line_h
+    y=750+(385-total_h)//2
+    for line in lines:
+        bbox=d.textbbox((0,0),line,font=font)
+        x=(720-(bbox[2]-bbox[0]))//2
+        d.text((x,y),line,font=font,fill=(248,249,251))
+        y+=line_h
+    d.text((58,1175),f'{index}/{total}',font=ImageFont.truetype(font_path,22),fill=(150,158,174))
+    d.rounded_rectangle((150,1180,570,1188),radius=4,fill=(70,76,90))
+    d.rounded_rectangle((150,1180,150+420*index/total,1188),radius=4,fill=(255,255,255))
+    path=os.path.join(tmp,f'scene_{index:02d}.png')
+    im.save(path,'JPEG',quality=92)
+    return path
 
 def _make_mp4(content_id, row, offer):
     ffmpeg=shutil.which('ffmpeg')
@@ -596,38 +686,46 @@ def _make_mp4(content_id, row, offer):
         raise HTTPException(503,'Не установлен Pillow')
     tmp=tempfile.mkdtemp(prefix='cfvideo_')
     try:
-        scenes=json.loads(row['scenes'] or '[]') if row['scenes'] else []
-        if not scenes:
-            pack=build_content_pack(row,offer); scenes=pack['scenes']
+        pack=build_content_pack(row,offer)
+        scenes=pack['scenes']
         font_paths=['/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf','/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf']
         font_path=next((p for p in font_paths if os.path.exists(p)),None)
         if not font_path: raise HTTPException(503,'Шрифт для MP4 не найден')
-        font=ImageFont.truetype(font_path,32); small=ImageFont.truetype(font_path,20)
-        files=[]
-        for i,sc in enumerate(scenes):
-            im=Image.new('RGB',(540,960),'white'); d=ImageDraw.Draw(im)
-            d.text((32,70), 'CPA FACTORY', font=small, fill='black')
-            lines=_wrap_lines(sc.get('text',''),28)
-            y=255
-            for line in lines:
-                bbox=d.textbbox((0,0),line,font=font); w=bbox[2]-bbox[0]
-                d.text(((540-w)/2,y),line,font=font,fill='black'); y+=46
-            d.text((32,870),f"Сцена {i+1}/{len(scenes)}",font=small,fill='black')
-            path=os.path.join(tmp,f'{i:03d}.png'); im.save(path); files.append(path)
+        product_path=_download_product_image(offer,tmp)
+        image_file=_make_scene_image
         concat=os.path.join(tmp,'concat.txt')
+        segment_files=[]
+        durations=[]
+        # Keep the video around 60 seconds, but change visuals every ~4-5 seconds.
+        for i,sc in enumerate(scenes,1):
+            text=_video_text(sc.get('text',''))
+            img=image_file(text,product_path,i,len(scenes),font_path,tmp)
+            audio=os.path.join(tmp,f'audio_{i:02d}.mp3')
+            try:
+                _tts_audio(text,audio)
+                probe=subprocess.run([ffmpeg,'-i',audio],capture_output=True,text=True,timeout=15)
+                m=re.search(r'Duration:\s*(\d+):(\d+):(\d+\.\d+)',probe.stderr)
+                audio_dur=float(m.group(1))*3600+float(m.group(2))*60+float(m.group(3)) if m else 3.5
+            except Exception:
+                audio=None; audio_dur=3.5
+            # Target visual cadence: roughly 4-5 sec per slide, while never cutting speech.
+            dur=max(3.8,min(6.0,audio_dur+0.35))
+            seg=os.path.join(tmp,f'segment_{i:02d}.mp4')
+            cmd=[ffmpeg,'-y','-loop','1','-i',img]
+            if audio:
+                cmd += ['-i',audio,'-t',f'{dur:.2f}','-vf','scale=720:1280,format=yuv420p','-r','24','-c:v','libx264','-preset','veryfast','-crf','22','-c:a','aac','-b:a','128k','-shortest',seg]
+            else:
+                cmd += ['-t',f'{dur:.2f}','-vf','scale=720:1280,format=yuv420p','-r','24','-c:v','libx264','-preset','veryfast','-crf','22',seg]
+            subprocess.run(cmd,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=45)
+            segment_files.append(seg); durations.append(dur)
         with open(concat,'w',encoding='utf-8') as f:
-            for p,sc in zip(files,scenes):
-                dur=5
-                m=re.search(r'(\d+):(\d+)-(\d+):(\d+)',str(sc.get('time','')))
-                if m:
-                    dur=max(2,(int(m.group(3))*60+int(m.group(4)))-(int(m.group(1))*60+int(m.group(2))))
-                f.write(f"file '{p}'\nduration {dur}\n")
-            f.write(f"file '{files[-1]}'\n")
+            for p in segment_files: f.write(f"file '{p}'\n")
         out=os.path.join(tmp,f'content_{content_id}.mp4')
-        subprocess.run([ffmpeg,'-y','-f','concat','-safe','0','-i',concat,'-vf','scale=540:960,format=yuv420p','-r','15','-c:v','libx264','-preset','ultrafast','-crf','28','-threads','1','-movflags','+faststart',out],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=90)
+        subprocess.run([ffmpeg,'-y','-f','concat','-safe','0','-i',concat,'-c','copy','-movflags','+faststart',out],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=90)
+        print('VIDEO_BUILD',json.dumps({'content_id':content_id,'scenes':len(scenes),'duration':round(sum(durations),1),'product_image':bool(product_path),'voice':True},ensure_ascii=False),flush=True)
         return out,tmp
     except subprocess.CalledProcessError as e:
-        raise HTTPException(500,'Ошибка сборки MP4: '+e.stderr.decode('utf-8','ignore')[-500:])
+        raise HTTPException(500,'Ошибка сборки MP4: '+e.stderr.decode('utf-8','ignore')[-800:])
 
 def _make_pack_zip(content_id,row,offer):
     mp4,tmp=_make_mp4(content_id,row,offer)

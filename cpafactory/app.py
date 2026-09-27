@@ -212,6 +212,20 @@ def startup():
     if os.getenv("CPA_AUTOPILOT_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}:
         threading.Thread(target=_autopilot_loop, daemon=True).start()
 
+    # Start the CPA production self-test from the actual running Uvicorn
+    # process. This is the authoritative boot path; the optional startup
+    # hook inside enhancements.py is retained only as a compatibility guard.
+    try:
+        import enhancements
+        print("CPA_PRODUCTION_BOOT_REQUESTED", flush=True)
+        threading.Thread(
+            target=enhancements._deep_boot,
+            daemon=True,
+            name="cpa-production-deep-boot",
+        ).start()
+    except Exception as e:
+        print("CPA_PRODUCTION_BOOT_ERROR", type(e).__name__, str(e), flush=True)
+
 @app.get("/health")
 def health():
     return {"ok": True, "service": "cpa-factory"}

@@ -1,0 +1,17 @@
+name: Keep CPA Factory awake
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  wake:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wake Render service
+        run: |
+          set -e
+          code=$(curl -L -sS -o /tmp/health.json -w "%{http_code}" --max-time 30 https://cpafactory-web.onrender.com/health)
+          cat /tmp/health.json
+          test "$code" = "200"

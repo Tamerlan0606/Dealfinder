@@ -232,8 +232,18 @@ def mp4_selftest():
         size=os.path.getsize(path)
         _LAST_PREVIEW_VIDEO={"path":path,"tmp":tmp,"content_id":int(row["id"])}
         result={"status":"ok","content_id":row["id"],"bytes":size,"seller_video":bool(offer.get("video_url") or offer.get("video_url2"))}
+        # Final container-level decode check: verify the actual MP4 can be
+        # decoded by ffmpeg after all audio/video muxing is complete.
+        ff=_ffmpeg_exe()
+        if not ff:
+            raise RuntimeError("ffmpeg недоступен для финальной проверки MP4")
+        check=subprocess.run([ff,"-v","error","-i",path,"-f","null","-"],
+                             capture_output=True,text=True,timeout=180)
+        if check.returncode!=0:
+            raise RuntimeError("MP4 decode failed: "+check.stderr[-1200:])
+        print("MP4_DECODE_SELFTEST",json.dumps({"status":"ok","content_id":row["id"],"bytes":size},ensure_ascii=False),flush=True)
         print("MP4_PRODUCTION_SELFTEST",json.dumps(result,ensure_ascii=False),flush=True)
-        print("MP4_PREVIEW_READY",json.dumps({"content_id":row["id"],"bytes":size},ensure_ascii=False),flush=True)
+        print("MP4_PREVIEW_READY",json.dumps({"content_id":row["id"],"bytes":size,"url":"/api/preview-video"},ensure_ascii=False),flush=True)
         return result
     except Exception as e:
         result={"status":"error","error":f"{type(e).__name__}: {e}"}
@@ -505,7 +515,7 @@ def make_mp4_seller_first(content_id,row,offer):
             _video_progress(91, 'Сборка финального MP4')
             subprocess.run([ff,"-y","-f","concat","-safe","0","-i",concat,"-c","copy","-movflags","+faststart",out],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=240)
             _video_progress(96, 'Проверка готового файла')
-            print("VIDEO_BUILD",json.dumps({"content_id":content_id,"seller_video":True,"resolution":"1080x1920","fps":30,"duration":round(sum(durations),1),"voice":"ru-RU-DmitryNeural","speech_rate":"+7%","text_overlay":False},ensure_ascii=False),flush=True)
+            print("VIDEO_BUILD",json.dumps({"content_id":content_id,"seller_video":True,"resolution":"1080x1920","fps":30,"duration":round(sum(durations),1),"voice":"ru_RU-ruslan-medium","speech_rate":"length_scale=1.12","text_overlay":False},ensure_ascii=False),flush=True)
             return out,tmp
         out,tmp2=_clean_image_video(content_id,row,offer,tmp,ff)
         print("VIDEO_BUILD",json.dumps({"content_id":content_id,"seller_video":False,"resolution":"1080x1920","fps":30,"voice":"ru-RU-DmitryNeural","speech_rate":"+7%","text_overlay":False},ensure_ascii=False),flush=True)

@@ -334,8 +334,15 @@ def _probe_duration(ff,path,default=10.0):
     except Exception:
         return default
 
+def _video_progress(percent, stage):
+    cb=getattr(core, '_VIDEO_PROGRESS_CALLBACK', None)
+    if cb:
+        try: cb(percent, stage)
+        except Exception: pass
+
 def _clean_image_video(content_id,row,offer,tmp,ff):
     # No text overlays: use seller images with gentle zoom/pan as a fallback.
+    _video_progress(10, 'Поиск медиа продавца')
     imgs=[offer.get("image_url"),offer.get("image_url2")]
     paths=[]
     for i,u in enumerate([x for x in imgs if x][:2]):
@@ -345,7 +352,10 @@ def _clean_image_video(content_id,row,offer,tmp,ff):
         return _original_make(content_id,row,offer)
     scenes=core.build_content_pack(row,offer)["scenes"]
     parts=[]; durations=[]
+    total=len(scenes)
+    _video_progress(14, 'Озвучка и монтаж сцен')
     for i,sc in enumerate(scenes,1):
+        _video_progress(15 + int(70*(i-1)/max(total,1)), f'Сцена {i} из {total}')
         text=core._video_text(sc.get("text","")); audio=os.path.join(tmp,f"a{i}.mp3")
         try:
             core._tts_audio(text,audio)
@@ -371,7 +381,9 @@ def _clean_image_video(content_id,row,offer,tmp,ff):
     with open(concat,"w",encoding="utf-8") as f:
         for p in parts: f.write("file '"+p.replace("'","'\\''")+"'\n")
     out=os.path.join(tmp,f"content_{content_id}.mp4")
+    _video_progress(90, 'Сборка финального MP4')
     subprocess.run([ff,"-y","-f","concat","-safe","0","-i",concat,"-c","copy","-movflags","+faststart",out],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=180)
+    _video_progress(96, 'Проверка готового файла')
     return out,tmp
 
 def make_mp4_seller_first(content_id,row,offer):
@@ -381,11 +393,15 @@ def make_mp4_seller_first(content_id,row,offer):
     try:
         ff=_ffmpeg_exe()
         if not ff: return _original_make(content_id,row,offer)
+        _video_progress(8, 'Загрузка видео продавца')
         video=seller_video(offer,tmp)
         if video:
+            _video_progress(14, 'Видео продавца найдено, начинаю монтаж')
             scenes=core.build_content_pack(row,offer)["scenes"]
             parts=[]; durations=[]; vd=_probe_duration(ff,video,10)
+            total=len(scenes)
             for i,sc in enumerate(scenes,1):
+                _video_progress(15 + int(72*(i-1)/max(total,1)), f'Сцена {i} из {total}')
                 text=core._video_text(sc.get("text","")); audio=os.path.join(tmp,f"a{i}.mp3")
                 try:
                     core._tts_audio(text,audio); ad=_probe_duration(ff,audio,4.2)
@@ -409,7 +425,9 @@ def make_mp4_seller_first(content_id,row,offer):
             with open(concat,"w",encoding="utf-8") as f:
                 for p in parts: f.write("file '"+p.replace("'","'\\''")+"'\n")
             out=os.path.join(tmp,f"content_{content_id}.mp4")
+            _video_progress(91, 'Сборка финального MP4')
             subprocess.run([ff,"-y","-f","concat","-safe","0","-i",concat,"-c","copy","-movflags","+faststart",out],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=240)
+            _video_progress(96, 'Проверка готового файла')
             print("VIDEO_BUILD",json.dumps({"content_id":content_id,"seller_video":True,"resolution":"1080x1920","fps":30,"duration":round(sum(durations),1),"voice":"ru-RU-DmitryNeural","speech_rate":"+7%","text_overlay":False},ensure_ascii=False),flush=True)
             return out,tmp
         out,tmp2=_clean_image_video(content_id,row,offer,tmp,ff)

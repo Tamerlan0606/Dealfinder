@@ -162,32 +162,31 @@ def _video_progress(job_id, percent, stage):
 
 _AUTOPILOT_INTERVAL = max(900, int(os.getenv("CPA_AUTOPILOT_INTERVAL", "3600") or 3600))
 
+def _autopilot_cycle():
+    try:
+        print("CPA_AUTOPILOT_CYCLE_START", flush=True)
+        result = _pipeline_run()
+        print("CPA_AUTOPILOT", json.dumps(result, ensure_ascii=False, default=str), flush=True)
+        if isinstance(result, dict) and result.get("status") in {"ok","skipped"}:
+            try:
+                import enhancements
+                threading.Thread(target=enhancements.mp4_selftest, daemon=True, name="cpa-preview-after-pipeline").start()
+            except Exception as e:
+                print("CPA_PREVIEW_START_ERROR", type(e).__name__, str(e), flush=True)
+        return result
+    except Exception as e:
+        print("CPA_AUTOPILOT_ERROR", type(e).__name__, str(e), flush=True)
+        return {"status":"error","error":f"{type(e).__name__}: {e}"}
+
 def _autopilot_loop():
     import time
-    time.sleep(5)
-    print("CPA_AUTOPILOT_STARTED", json.dumps({"interval_seconds": _AUTOPILOT_INTERVAL}, ensure_ascii=False))
+    print("CPA_AUTOPILOT_STARTED", json.dumps({"interval_seconds": _AUTOPILOT_INTERVAL}, ensure_ascii=False), flush=True)
     while True:
-        try:
-            if _AUTOPILOT_LOCK.acquire(blocking=False):
-                try:
-                    result = _pipeline_run()
-                    print("CPA_AUTOPILOT", json.dumps(result, ensure_ascii=False, default=str))
-                    if isinstance(result, dict) and result.get("status") == "ok":
-                        try:
-                            import enhancements
-                            threading.Thread(
-                                target=enhancements.mp4_selftest,
-                                daemon=True,
-                                name="cpa-preview-after-pipeline",
-                            ).start()
-                        except Exception as e:
-                            print("CPA_PREVIEW_START_ERROR", type(e).__name__, str(e), flush=True)
-                except Exception as e:
-                    print("CPA_AUTOPILOT_ERROR", type(e).__name__, str(e))
-                finally:
-                    _AUTOPILOT_LOCK.release()
-        except Exception as e:
-            print("CPA_AUTOPILOT_LOOP_ERROR", type(e).__name__, str(e))
+        if _AUTOPILOT_LOCK.acquire(blocking=False):
+            try:
+                _autopilot_cycle()
+            finally:
+                _AUTOPILOT_LOCK.release()
         time.sleep(_AUTOPILOT_INTERVAL)
 
 def _mp4_selftest():

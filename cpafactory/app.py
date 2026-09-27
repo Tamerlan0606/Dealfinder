@@ -306,6 +306,31 @@ def cpa_import_gdeslon(x_admin_token: str | None = Header(default=None)):
                 added+=1
     return {"status":"ok","source":"gdeslon","api":"xml","received":len(items),"added":added,"updated":updated,"skipped":skipped,"query":query,"page":page,"limit":limit}
 
+@app.get("/api/cpa/diagnostic")
+def cpa_diagnostic(token: str | None = None):
+    expected=os.getenv("CPA_CRON_TOKEN","").strip()
+    if not expected or token != expected:
+        raise HTTPException(401,"Недействительный диагностический токен")
+    gs_token=os.getenv("GDESLON_API_TOKEN","").strip()
+    result={"gdeslon_configured":bool(gs_token),"gdeslon_reachable":False,"received":0,"sample_names":[]}
+    if not gs_token:
+        result["error"]="GDESLON_API_TOKEN не задан"
+        return result
+    query=os.getenv("GDESLON_QUERY","").strip()
+    limit=max(1,min(int(os.getenv("GDESLON_LIMIT","10") or 10),10))
+    page=max(1,int(os.getenv("GDESLON_PAGE","1") or 1))
+    params={"q":query,"l":str(limit),"p":str(page),"_gs_at":gs_token}
+    url="https://www.gdeslon.ru/api/search.xml?"+urllib.parse.urlencode(params)
+    try:
+        raw=_gdeslon_get(url,gs_token)
+        items=_gdeslon_parse_xml(raw)
+        result["gdeslon_reachable"]=True
+        result["received"]=len(items)
+        result["sample_names"]=[str(x["name"])[:120] for x in items[:3]]
+    except Exception as e:
+        result["error"]=f"{type(e).__name__}: {e}"
+    return result
+
 @app.get("/api/cpa/status")
 def cpa_status():
     return {

@@ -1,7 +1,7 @@
 import os, re, sqlite3, json, urllib.request, urllib.parse, tempfile, subprocess, shutil, textwrap, zipfile, io, html, threading
 from urllib.parse import urlencode, urlparse, parse_qsl, urlunparse
 from fastapi import FastAPI, Request, HTTPException, Header
-from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse, StreamingResponse, Response
 import psycopg
 from psycopg.rows import dict_row
 
@@ -910,3 +910,11 @@ async function queueItem(id){
 }
 load(); refreshPipelineStatus();
 </script></body></html>"""
+
+@app.head("/")
+def home_head():
+    return Response(status_code=200)
+
+@app.get("/")
+def home():
+    return HTMLResponse(PAGE)

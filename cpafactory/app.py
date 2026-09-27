@@ -363,7 +363,7 @@ def pipeline_status():
     top = cpa_top(1)
     return {
         "admitad_configured": bool(os.getenv("ADMITAD_ACCESS_TOKEN") and os.getenv("ADMITAD_WEBSITE_ID")),
-        "gdeslon_configured": bool(os.getenv("GDESLON_WM_ID") and os.getenv("GDESLON_API_TOKEN")),
+        "gdeslon_configured": bool(os.getenv("GDESLON_API_TOKEN")),
         "active_offers": active, "queued": queued,
         "top_offer": dict(top[0]) if top else None,
         "last_run": dict(last) if last else None

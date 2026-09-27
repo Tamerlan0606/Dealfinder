@@ -898,3 +898,47 @@ async function importCPA(){
 async function showTop(){
  let r=await fetch('/api/cpa/top?limit=10'), x=await r.json();
  topOffers.innerHTML=x.length?'<table><tr><th>Оффер</th><th>EPC</th><th>CR</th><th>Рейтинг</th><th>Приоритет</th></tr>'+
+ x.map(v=>'<tr><td>'+esc(v.name)+'</td><td>'+Number(v.epc||0).toLocaleString('ru-RU')+'</td><td>'+Number(v.cr||0).toLocaleString('ru-RU')+'%</td><td>'+Number(v.rating||0).toLocaleString('ru-RU')+'</td><td>'+v.score+'</td></tr>').join('')+'</table>':'Подходящих активных офферов пока нет';
+}
+async function refreshPipelineStatus(){
+ try{
+  let p=await (await fetch('/api/pipeline/status')).json();
+  if(p.last_run){pipelineStatus.textContent=p.last_run.status==='ok'?'готов: материал в очереди':p.last_run.message||p.last_run.status;}
+  else if(p.gdeslon_configured) pipelineStatus.textContent='готов к запуску через GdeSlon';
+  else if(p.admitad_configured) pipelineStatus.textContent='готов к запуску через Admitad';
+  else pipelineStatus.textContent='нет подключённой CPA-сети';
+ }catch(e){pipelineStatus.textContent='ошибка проверки';}
+}
+async function runPipeline(){
+ let r=await adminFetch('/api/pipeline/run',{method:'POST'});
+ let x=await r.json().catch(()=>({}));
+ if(x.status==='not_configured'){alert('Не подключена ни одна CPA-сеть: GdeSlon или Admitad.');return;}
+ if(!r.ok){alert(x.detail||x.message||'Ошибка автопилота');return;}
+ alert(x.status==='skipped'?'Свежий материал уже существует.':'Готово: оффер выбран, материал создан и поставлен в очередь RUTUBE.');
+ load(); refreshPipelineStatus();
+}
+async function addOffer(){
+ let r=await adminFetch('/api/offers',{method:'POST',body:JSON.stringify({name:name.value,merchant:merchant.value,price:price.value,commission:commission.value,tracking_url:url.value,traffic_rules:rules.value})});
+ if(r.ok){['name','merchant','price','commission','url','rules'].forEach(x=>document.getElementById(x).value='');load();}
+}
+async function generate(){
+ let r=await adminFetch('/api/content/generate',{method:'POST',body:JSON.stringify({offer_id:offerSelect.value,platform:platform.value})});
+ if(!r.ok)return;
+ let x=await r.json(); generated.innerHTML='<p><b>'+esc(x.title)+'</b></p><textarea rows="6" readonly>'+esc(x.script)+'</textarea><button onclick="queueItem('+x.id+')">Поставить в очередь RUTUBE</button><div class="ok">Материал создан со статусом draft.</div>';load();
+}
+async function queueItem(id){
+ let when=prompt('Дата/время публикации ISO, например 2026-09-27T12:00:00+03:00','');
+ if(when===null)return;
+ let r=await adminFetch('/api/publish-queue',{method:'POST',body:JSON.stringify({content_id:id,scheduled_at:when||null})});
+ if(r.ok){alert('Добавлено в очередь.');load();}
+}
+load(); refreshPipelineStatus();
+</script></body></html>"""
+
+@app.head("/")
+def home_head():
+    return Response(status_code=200)
+
+@app.get("/")
+def home():
+    return HTMLResponse(PAGE)

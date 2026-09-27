@@ -193,6 +193,24 @@ def pipeline_with_demand():
 
 core._pipeline_run=pipeline_with_demand
 
+def mp4_selftest():
+    try:
+        with core.db() as c:
+            row=c.execute("select * from content order by id desc limit 1").fetchone()
+            if not row: return {"status":"no_content"}
+            offer_id=row["offer_id"] if "offer_id" in row.keys() else None
+            offer=c.execute("select * from offers where id=%s",(offer_id,)).fetchone() if offer_id else c.execute("select * from offers order by id desc limit 1").fetchone()
+        path,tmp=core._make_mp4(row["id"],row,offer)
+        size=os.path.getsize(path)
+        shutil.rmtree(tmp,ignore_errors=True)
+        result={"status":"ok","content_id":row["id"],"bytes":size,"seller_video":bool(offer.get("video_url") or offer.get("video_url2")) if hasattr(offer,"get") else False}
+        print("MP4_PRODUCTION_SELFTEST",json.dumps(result,ensure_ascii=False),flush=True)
+        return result
+    except Exception as e:
+        result={"status":"error","error":f"{type(e).__name__}: {e}"}
+        print("MP4_PRODUCTION_SELFTEST",json.dumps(result,ensure_ascii=False),flush=True)
+        return result
+
 def _download(url,path,limit=30*1024*1024):
     try:
         req=urllib.request.Request(url,headers={"User-Agent":"Mozilla/5.0 CPAFactory/1.0"})
@@ -288,6 +306,7 @@ def enhancement_startup():
             enrich_existing()
             result=pipeline_with_demand()
             print("CPA_BOOT_PIPELINE",json.dumps(result,ensure_ascii=False,default=str),flush=True)
+            mp4_selftest()
         except Exception as e:
             print("CPA_BOOT_PIPELINE_ERROR",type(e).__name__,str(e),flush=True)
     threading.Thread(target=_source_boot,daemon=True).start()

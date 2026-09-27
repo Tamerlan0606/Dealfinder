@@ -497,27 +497,36 @@ def pipeline_status():
 
 def _pipeline_run():
     try:
+        print("CPA_PIPELINE_STAGE", json.dumps({"stage":"start"}, ensure_ascii=False), flush=True)
         try:
             imported = cpa_import(ADMIN_TOKEN)
-        except Exception:
+        except Exception as e:
+            print("CPA_PIPELINE_STAGE", json.dumps({"stage":"admitad_error","error":f"{type(e).__name__}: {e}"}, ensure_ascii=False), flush=True)
             imported = {"status":"error"}
+        print("CPA_PIPELINE_STAGE", json.dumps({"stage":"admitad_done","status":imported.get("status")}, ensure_ascii=False), flush=True)
         if imported.get("status") == "not_configured" or imported.get("status") == "error":
+            print("CPA_PIPELINE_STAGE", json.dumps({"stage":"gdeslon_start"}, ensure_ascii=False), flush=True)
             try:
                 imported = cpa_import_gdeslon(ADMIN_TOKEN)
-            except Exception:
+            except Exception as e:
+                print("CPA_PIPELINE_STAGE", json.dumps({"stage":"gdeslon_error","error":f"{type(e).__name__}: {e}"}, ensure_ascii=False), flush=True)
                 imported = {"status":"error"}
+            print("CPA_PIPELINE_STAGE", json.dumps({"stage":"gdeslon_done","status":imported.get("status"),"added":imported.get("added",0),"updated":imported.get("updated",0)}, ensure_ascii=False), flush=True)
         if imported.get("status") == "not_configured":
             msg = "Не подключена CPA-сеть: Admitad или Где Слон?"
             with db() as c:
                 c.execute("insert into pipeline_runs(status,message) values(%s,%s)", ("not_configured", msg))
             return {"status":"not_configured","message":msg}
+        print("CPA_PIPELINE_STAGE", json.dumps({"stage":"top_start"}, ensure_ascii=False), flush=True)
         top = cpa_top(1)
+        print("CPA_PIPELINE_STAGE", json.dumps({"stage":"top_done","count":len(top)}, ensure_ascii=False), flush=True)
         if not top:
             msg = "После импорта нет активных офферов"
             with db() as c:
                 c.execute("insert into pipeline_runs(status,message) values(%s,%s)", ("empty", msg))
             return {"status":"empty","message":msg}
         o = top[0]
+        print("CPA_PIPELINE_STAGE", json.dumps({"stage":"selected","offer_id":int(o["id"])}, ensure_ascii=False), flush=True)
         offer_id = int(o["id"])
         name = o["name"]
         price = o["price"] or 0
@@ -541,10 +550,12 @@ def _pipeline_run():
                     f"Смотрим характеристики, кому он подходит и на что обратить внимание перед покупкой. "
                     f"Ссылка на актуальную цену — в описании. "
                     f"Партнёрская ставка по программе: {rate_text or 'уточняется'}.")
+            print("CPA_PIPELINE_STAGE", json.dumps({"stage":"db_insert_start"}, ensure_ascii=False), flush=True)
             row=c.execute("""insert into content(offer_id,title,script,platform,status)
               values(%s,%s,%s,'rutube','ready') returning *""",
               (offer_id,title,script)).fetchone()
             content_id=int(row["id"])
+            print("CPA_PIPELINE_STAGE", json.dumps({"stage":"content_created","content_id":content_id}, ensure_ascii=False), flush=True)
             q=c.execute("""insert into publish_queue(content_id,scheduled_at,status)
               values(%s,null,'queued') returning *""",(content_id,)).fetchone()
             queue_id=int(q["id"])

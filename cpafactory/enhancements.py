@@ -200,7 +200,7 @@ def mp4_selftest():
             if not row: return {"status":"no_content"}
             offer_id=row["offer_id"] if "offer_id" in row.keys() else None
             offer=c.execute("select * from offers where id=%s",(offer_id,)).fetchone() if offer_id else c.execute("select * from offers order by id desc limit 1").fetchone()
-        path,tmp=core._make_mp4(row["id"],row,offer)
+        row=dict(row); offer=dict(offer) if offer else {}\n        path,tmp=core._make_mp4(row["id"],row,offer)
         size=os.path.getsize(path)
         shutil.rmtree(tmp,ignore_errors=True)
         result={"status":"ok","content_id":row["id"],"bytes":size,"seller_video":bool(offer.get("video_url") or offer.get("video_url2")) if hasattr(offer,"get") else False}

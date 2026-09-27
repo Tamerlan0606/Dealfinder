@@ -625,7 +625,7 @@ def _make_mp4(content_id, row, offer):
                 f.write(f"file '{p}'\nduration {dur}\n")
             f.write(f"file '{files[-1]}'\n")
         out=os.path.join(tmp,f'content_{content_id}.mp4')
-        subprocess.run([ffmpeg,'-y','-f','concat','-safe','0','-i',concat,'-vf','scale=1080:1920,format=yuv420p','-r','30','-movflags','+faststart',out],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=90)
+        subprocess.run([ffmpeg,'-y','-f','concat','-safe','0','-i',concat,'-vf','scale=720:1280,format=yuv420p','-r','24','-c:v','libx264','-preset','ultrafast','-crf','28','-threads','1','-movflags','+faststart',out],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=90)
         return out,tmp
     except subprocess.CalledProcessError as e:
         raise HTTPException(500,'Ошибка сборки MP4: '+e.stderr.decode('utf-8','ignore')[-500:])

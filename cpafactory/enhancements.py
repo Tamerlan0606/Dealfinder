@@ -3,6 +3,7 @@ from fastapi import Header, HTTPException
 from fastapi.responses import Response
 
 import app as core
+from PIL import Image
 
 MEDIA_KEYS = ("image_url","image_url2","video_url","video_url2")
 

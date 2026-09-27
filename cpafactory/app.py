@@ -172,6 +172,16 @@ def _autopilot_loop():
                 try:
                     result = _pipeline_run()
                     print("CPA_AUTOPILOT", json.dumps(result, ensure_ascii=False, default=str))
+                    if isinstance(result, dict) and result.get("status") == "ok":
+                        try:
+                            import enhancements
+                            threading.Thread(
+                                target=enhancements.mp4_selftest,
+                                daemon=True,
+                                name="cpa-preview-after-pipeline",
+                            ).start()
+                        except Exception as e:
+                            print("CPA_PREVIEW_START_ERROR", type(e).__name__, str(e), flush=True)
                 except Exception as e:
                     print("CPA_AUTOPILOT_ERROR", type(e).__name__, str(e))
                 finally:

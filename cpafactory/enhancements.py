@@ -76,7 +76,13 @@ def enrich_existing(limit=100):
     except Exception as e:
         print("CPA_MEDIA_ENRICH_ERROR",type(e).__name__,str(e),flush=True)
 
+_WORDSTAT_DISABLED=False
+_WORDSTAT_DISABLED_REASON=""
+
 def wordstat_count(phrase):
+    global _WORDSTAT_DISABLED, _WORDSTAT_DISABLED_REASON
+    if _WORDSTAT_DISABLED:
+        return 0
     token=os.getenv("YANDEX_SEARCH_API_KEY","").strip()
     folder_id=os.getenv("YANDEX_SEARCH_FOLDER_ID","").strip()
     if not token or not phrase or not folder_id:
@@ -99,7 +105,13 @@ def wordstat_count(phrase):
         exact=[int(x.get("count") or 0) for x in rows if str(x.get("phrase","")).strip().lower()==target]
         return max(exact or [max([int(x.get("count") or 0) for x in rows] or [int(data.get("totalCount") or 0)])])
     except Exception as e:
-        print("WORDSTAT_ERROR",type(e).__name__,str(e),flush=True)
+        msg=f"{type(e).__name__}: {e}"
+        if isinstance(e, urllib.error.HTTPError) and getattr(e,"code",0) in (401,403):
+            _WORDSTAT_DISABLED=True
+            _WORDSTAT_DISABLED_REASON=msg
+            print("WORDSTAT_DISABLED",msg,flush=True)
+        else:
+            print("WORDSTAT_ERROR",msg,flush=True)
         return 0
 
 def refresh_demand(limit=30):

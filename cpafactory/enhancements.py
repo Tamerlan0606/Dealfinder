@@ -280,9 +280,25 @@ def _edge_tts_audio(text, out_path):
     return out_path
 
 def production_tts_audio(text,out_path):
-    try: return _edge_tts_audio(text,out_path)
-    except Exception as e:
-        print("EDGE_TTS_FALLBACK",type(e).__name__,str(e),flush=True)
+    # Primary production voice: local Piper Russian male neural voice. This
+    # removes dependence on Microsoft Edge's outbound WebSocket service and
+    # keeps speech generation deterministic on Render.
+    try:
+        piper=shutil.which("piper")
+        if piper:
+            cmd=[piper,"--model","ru_RU-ruslan-medium","--output_file",out_path,
+                 "--length_scale","1.12"]
+            subprocess.run(cmd,input=str(text or ""),text=True,check=True,
+                           stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=60)
+            if os.path.exists(out_path) and os.path.getsize(out_path)>1000:
+                print("PIPER_TTS_OK",json.dumps({"voice":"ru_RU-ruslan-medium","bytes":os.path.getsize(out_path)},ensure_ascii=False),flush=True)
+                return out_path
+    except Exception as ex:
+        print("PIPER_TTS_FALLBACK",type(ex).__name__,str(ex),flush=True)
+    try:
+        return _edge_tts_audio(text,out_path)
+    except Exception as ex:
+        print("EDGE_TTS_FALLBACK",type(ex).__name__,str(ex),flush=True)
         return core._tts_audio(text,out_path)
 
 core._tts_audio=production_tts_audio

@@ -450,7 +450,15 @@ def _clean_image_video(content_id,row,offer,tmp,ff):
         p=os.path.join(tmp,f"img_{i}.jpg")
         if _download(str(u),p,12*1024*1024): paths.append(p)
     if not paths:
-        return _original_make(content_id,row,offer)
+        # Never fall back to the legacy seller-video transcoder on Render Free.
+        placeholder=os.path.join(tmp,"placeholder.png")
+        from PIL import Image, ImageDraw
+        im=Image.new("RGB",(1080,1920),(24,24,28))
+        d=ImageDraw.Draw(im)
+        d.text((90,820),"CPA Factory",fill=(245,245,245))
+        d.text((90,900),"Товар из партнёрской сети",fill=(190,190,190))
+        im.save(placeholder,"PNG")
+        paths=[placeholder]
     # Short-form production: cap the rendered cut to four scenes.
     # This keeps the 1080x1920 output while preventing long FFmpeg/TTS jobs
     # from exhausting the Render Free instance.
@@ -506,9 +514,14 @@ def make_mp4_seller_first(content_id,row,offer):
     except Exception as e:
         print("SELLER_VIDEO_BUILD_ERROR",type(e).__name__,str(e),flush=True)
         shutil.rmtree(tmp,ignore_errors=True)
-        return _original_make(content_id,row,offer)
+        # Last-resort path: still use the resource-safe image renderer.
+        # Do not call the legacy seller-video implementation.
+        safe_tmp=tempfile.mkdtemp(prefix="cfvideo_safe_")
+        out,_=_clean_image_video(content_id,row,offer,safe_tmp,ff)
+        return out,safe_tmp
 
 core._make_mp4=make_mp4_seller_first
+print("CPA_VIDEO_ENGINE_VERSION",json.dumps({"version":"safe-image-v2","seller_transcode":"disabled","legacy_fallback":"disabled"},ensure_ascii=False),flush=True)
 # Route every legacy/fallback video path through the production TTS chain too.
 core._tts_audio=production_tts_audio
 

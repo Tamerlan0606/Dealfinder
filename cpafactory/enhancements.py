@@ -442,60 +442,42 @@ def _video_progress(percent, stage):
         except Exception: pass
 
 def _clean_image_video(content_id,row,offer,tmp,ff):
-    # Resource-safe production fallback for Render Free: static product frame; no zoompan/filter graph.
-    _video_progress(10, 'Поиск медиа продавца')
-    imgs=[offer.get("image_url"),offer.get("image_url2")]
-    paths=[]
-    for i,u in enumerate([x for x in imgs if x][:2]):
-        p=os.path.join(tmp,f"img_{i}.jpg")
-        if _download(str(u),p,12*1024*1024): paths.append(p)
-    if not paths:
-        # Never fall back to the legacy seller-video transcoder on Render Free.
-        placeholder=os.path.join(tmp,"placeholder.png")
+    # Render Free-safe production path: one image + one narration + one FFmpeg pass.
+    # This avoids per-scene H.264 encodes, which can exceed the free CPU budget.
+    _video_progress(10, 'Подготовка медиа товара')
+    imgs=[offer.get('image_url'),offer.get('image_url2')]
+    src=None
+    for u in [x for x in imgs if x]:
+        p=os.path.join(tmp,'product.jpg')
+        if _download(str(u),p,12*1024*1024):
+            src=p; break
+    if not src:
+        src=os.path.join(tmp,'placeholder.png')
         from PIL import Image, ImageDraw
-        im=Image.new("RGB",(1080,1920),(24,24,28))
+        im=Image.new('RGB',(1080,1920),(24,24,28))
         d=ImageDraw.Draw(im)
-        d.text((90,820),"CPA Factory",fill=(245,245,245))
-        d.text((90,900),"Товар из партнёрской сети",fill=(190,190,190))
-        im.save(placeholder,"PNG")
-        paths=[placeholder]
-    # Short-form production: cap the rendered cut to four scenes.
-    # This keeps the 1080x1920 output while preventing long FFmpeg/TTS jobs
-    # from exhausting the Render Free instance.
-    scenes=core.build_content_pack(row,offer)["scenes"][:4]
-    parts=[]; durations=[]
-    total=len(scenes)
-    _video_progress(14, 'Озвучка и монтаж сцен')
-    for i,sc in enumerate(scenes,1):
-        _video_progress(15 + int(70*(i-1)/max(total,1)), f'Сцена {i} из {total}')
-        text=core._video_text(sc.get("text","")); audio=os.path.join(tmp,f"a{i}.mp3")
-        try:
-            production_tts_audio(text,audio)
-            ad=_probe_duration(ff,audio,4.2)
-        except Exception:
-            audio=None; ad=4.2
-        dur=max(3.8,min(7.0,ad+0.25)); durations.append(dur)
-        src=paths[(i-1)%len(paths)]; seg=os.path.join(tmp,f"s{i}.mp4")
-        vf=("scale=1080:1920:force_original_aspect_ratio=increase,"
-            "crop=1080:1920,format=yuv420p")
-        cmd=[ff,"-y","-loop","1","-i",src]
-        if audio: cmd += ["-i",audio]
-        cmd += ["-t",f"{dur:.2f}","-vf",vf,"-r","30","-map","0:v:0"]
-        if audio: cmd += ["-map","1:a:0"]
-        cmd += ["-c:v","libx264","-preset","ultrafast","-crf","28","-maxrate","2500k","-bufsize","5000k"]
-        if audio: cmd += ["-c:a","aac","-b:a","160k","-shortest"]
-        cmd += ["-movflags","+faststart",seg]
-        subprocess.run(cmd,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=90)
-        parts.append(seg)
-    concat=os.path.join(tmp,"concat.txt")
-    with open(concat,"w",encoding="utf-8") as f:
-        for p in parts: f.write("file '"+p.replace("'","'\\''")+"'\n")
-    out=os.path.join(tmp,f"content_{content_id}.mp4")
-    _video_progress(90, 'Сборка финального MP4')
-    subprocess.run([ff,"-y","-f","concat","-safe","0","-i",concat,"-c","copy","-movflags","+faststart",out],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=180)
+        d.text((90,820),'CPA Factory',fill=(245,245,245))
+        d.text((90,900),'Товар из партнёрской сети',fill=(190,190,190))
+        im.save(src,'PNG')
+    _video_progress(20, 'Озвучка')
+    pack=core.build_content_pack(row,offer)
+    scenes=pack.get('scenes') or []
+    narration=' '.join(core._video_text(sc.get('text','')) for sc in scenes if sc.get('text'))
+    if not narration:
+        narration=core._video_text(str(row.get('script','')))
+    audio=os.path.join(tmp,'narration.mp3')
+    production_tts_audio(narration,audio)
+    dur=max(5.0,min(60.0,_probe_duration(ff,audio,12.0)+0.35))
+    out=os.path.join(tmp,f'content_{content_id}.mp4')
+    _video_progress(45, 'Сборка MP4')
+    vf='scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,format=yuv420p'
+    cmd=[ff,'-y','-loop','1','-i',src,'-i',audio,'-t',f'{dur:.2f}','-vf',vf,'-r','24',
+         '-map','0:v:0','-map','1:a:0','-c:v','libx264','-preset','ultrafast','-crf','30',
+         '-maxrate','1800k','-bufsize','3600k','-c:a','aac','-b:a','128k','-shortest',
+         '-movflags','+faststart',out]
+    subprocess.run(cmd,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=90)
     _video_progress(96, 'Проверка готового файла')
     return out,tmp
-
 def make_mp4_seller_first(content_id,row,offer):
     if hasattr(row,"keys") and not isinstance(row,dict): row=dict(row)
     if hasattr(offer,"keys") and not isinstance(offer,dict): offer=dict(offer)

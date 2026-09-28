@@ -216,9 +216,14 @@ def pipeline_with_demand():
 core._pipeline_run=pipeline_with_demand
 
 _LAST_PREVIEW_VIDEO = {"path":"", "tmp":"", "content_id":0}
+_MP4_SELFTEST_LOCK = threading.Lock()
 
 def mp4_selftest():
     global _LAST_PREVIEW_VIDEO
+    if not _MP4_SELFTEST_LOCK.acquire(blocking=False):
+        result={"status":"busy"}
+        print("MP4_PRODUCTION_SELFTEST",json.dumps(result,ensure_ascii=False),flush=True)
+        return result
     try:
         with core.db() as c:
             row=c.execute("select * from content order by id desc limit 1").fetchone()
@@ -256,6 +261,8 @@ def mp4_selftest():
         result={"status":"error","error":f"{type(e).__name__}: {e}"}
         print("MP4_PRODUCTION_SELFTEST",json.dumps(result,ensure_ascii=False),flush=True)
         return result
+    finally:
+        _MP4_SELFTEST_LOCK.release()
 
 @core.app.get("/api/preview-video")
 def preview_video():
@@ -435,7 +442,7 @@ def _video_progress(percent, stage):
         except Exception: pass
 
 def _clean_image_video(content_id,row,offer,tmp,ff):
-    # No text overlays: use seller images with gentle zoom/pan as a fallback.
+    # Resource-safe production fallback for Render Free: static product frame; no zoompan/filter graph.
     _video_progress(10, 'Поиск медиа продавца')
     imgs=[offer.get("image_url"),offer.get("image_url2")]
     paths=[]
@@ -459,14 +466,12 @@ def _clean_image_video(content_id,row,offer,tmp,ff):
         dur=max(3.8,min(7.0,ad+0.25)); durations.append(dur)
         src=paths[(i-1)%len(paths)]; seg=os.path.join(tmp,f"s{i}.mp4")
         vf=("scale=1080:1920:force_original_aspect_ratio=increase,"
-            "crop=1080:1920,zoompan=z='min(zoom+0.0008,1.08)':"
-            "x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:"
-            "s=1080x1920:fps=30,format=yuv420p")
+            "crop=1080:1920,format=yuv420p")
         cmd=[ff,"-y","-loop","1","-i",src]
         if audio: cmd += ["-i",audio]
         cmd += ["-t",f"{dur:.2f}","-vf",vf,"-r","30","-map","0:v:0"]
         if audio: cmd += ["-map","1:a:0"]
-        cmd += ["-c:v","libx264","-preset","veryfast","-b:v","4500k","-maxrate","5000k","-bufsize","10000k"]
+        cmd += ["-c:v","libx264","-preset","ultrafast","-crf","28","-maxrate","2500k","-bufsize","5000k"]
         if audio: cmd += ["-c:a","aac","-b:a","160k","-shortest"]
         cmd += ["-movflags","+faststart",seg]
         subprocess.run(cmd,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=90)

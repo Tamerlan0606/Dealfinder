@@ -459,7 +459,7 @@ def _clean_image_video(content_id,row,offer,tmp,ff):
         if audio: cmd += ["-i",audio]
         cmd += ["-t",f"{dur:.2f}","-vf",vf,"-r","30","-map","0:v:0"]
         if audio: cmd += ["-map","1:a:0"]
-        cmd += ["-c:v","libx264","-preset","veryfast","-crf","20"]
+        cmd += ["-c:v","libx264","-preset","veryfast","-b:v","4500k","-maxrate","5000k","-bufsize","10000k"]
         if audio: cmd += ["-c:a","aac","-b:a","160k","-shortest"]
         cmd += ["-movflags","+faststart",seg]
         subprocess.run(cmd,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=90)
@@ -503,7 +503,7 @@ def make_mp4_seller_first(content_id,row,offer):
                         "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,format=yuv420p",
                         "-r","30","-map","0:v:0"]
                 if audio: cmd += ["-map","1:a:0"]
-                cmd += ["-c:v","libx264","-preset","veryfast","-crf","20"]
+                cmd += ["-c:v","libx264","-preset","veryfast","-b:v","4500k","-maxrate","5000k","-bufsize","10000k"]
                 if audio: cmd += ["-c:a","aac","-b:a","160k","-shortest"]
                 cmd += ["-movflags","+faststart",seg]
                 subprocess.run(cmd,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=120)

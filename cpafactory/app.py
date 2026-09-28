@@ -233,7 +233,12 @@ def startup():
             try:
                 import enhancements
                 print("CPA_STARTUP_MP4_SELFTEST_START", flush=True)
-                print("CPA_STARTUP_MP4_SELFTEST_RESULT", json.dumps(enhancements.mp4_selftest(), ensure_ascii=False), flush=True)
+                # Use the deterministic deep production path: it waits for GdeSlon,
+                # creates real content when needed, builds the MP4, and validates
+                # the final container. Direct mp4_selftest() can return no_content
+                # during a cold start before the importer has populated the DB.
+                enhancements._deep_boot()
+                print("CPA_STARTUP_MP4_SELFTEST_RESULT", "deep_boot_finished", flush=True)
             except Exception as e:
                 print("CPA_STARTUP_MP4_SELFTEST_ERROR", type(e).__name__, str(e), flush=True)
         threading.Thread(target=_startup_mp4_check, daemon=True, name="cpa-startup-mp4-selftest").start()

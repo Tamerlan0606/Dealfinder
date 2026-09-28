@@ -168,11 +168,15 @@ def _autopilot_cycle():
         result = _pipeline_run()
         print("CPA_AUTOPILOT", json.dumps(result, ensure_ascii=False, default=str), flush=True)
         if isinstance(result, dict) and result.get("status") in {"ok","skipped"}:
-            try:
-                import enhancements
-                threading.Thread(target=enhancements.mp4_selftest, daemon=True, name="cpa-preview-after-pipeline").start()
-            except Exception as e:
-                print("CPA_PREVIEW_START_ERROR", type(e).__name__, str(e), flush=True)
+            # Startup deep self-test owns the production MP4 validation. Do not
+            # launch a second FFmpeg job from the autopilot cycle: on the Free
+            # instance that can double CPU/RAM usage and restart the service.
+            if os.getenv("CPA_STARTUP_MP4_SELFTEST", "1").strip().lower() in {"0","false","no","off"}:
+                try:
+                    import enhancements
+                    threading.Thread(target=enhancements.mp4_selftest, daemon=True, name="cpa-preview-after-pipeline").start()
+                except Exception as e:
+                    print("CPA_PREVIEW_START_ERROR", type(e).__name__, str(e), flush=True)
         return result
     except Exception as e:
         print("CPA_AUTOPILOT_ERROR", type(e).__name__, str(e), flush=True)

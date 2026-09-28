@@ -225,6 +225,19 @@ def startup():
     except Exception as e:
         print("CPA_ENHANCEMENTS_MIGRATION_ERROR", type(e).__name__, str(e), flush=True)
 
+    # Run one full production video self-test after startup. This is deliberately
+    # asynchronous so health/API availability is never blocked by FFmpeg/TTS.
+    if os.getenv("CPA_STARTUP_MP4_SELFTEST", "1").strip().lower() not in {"0", "false", "no", "off"}:
+        def _startup_mp4_check():
+            time.sleep(8)
+            try:
+                import enhancements
+                print("CPA_STARTUP_MP4_SELFTEST_START", flush=True)
+                print("CPA_STARTUP_MP4_SELFTEST_RESULT", json.dumps(enhancements.mp4_selftest(), ensure_ascii=False), flush=True)
+            except Exception as e:
+                print("CPA_STARTUP_MP4_SELFTEST_ERROR", type(e).__name__, str(e), flush=True)
+        threading.Thread(target=_startup_mp4_check, daemon=True, name="cpa-startup-mp4-selftest").start()
+
     if os.getenv("CPA_AUTOPILOT_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}:
         # One orchestrator owns imports + content generation. Running a separate
         # GdeSlon importer in parallel caused UNIQUE conflicts on source/external_id.

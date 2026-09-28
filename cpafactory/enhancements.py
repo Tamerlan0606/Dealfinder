@@ -445,7 +445,7 @@ def _clean_image_video(content_id,row,offer,tmp,ff):
         _video_progress(15 + int(70*(i-1)/max(total,1)), f'Сцена {i} из {total}')
         text=core._video_text(sc.get("text","")); audio=os.path.join(tmp,f"a{i}.mp3")
         try:
-            core._tts_audio(text,audio)
+            production_tts_audio(text,audio)
             ad=_probe_duration(ff,audio,4.2)
         except Exception:
             audio=None; ad=4.2
@@ -491,7 +491,7 @@ def make_mp4_seller_first(content_id,row,offer):
                 _video_progress(15 + int(72*(i-1)/max(total,1)), f'Сцена {i} из {total}')
                 text=core._video_text(sc.get("text","")); audio=os.path.join(tmp,f"a{i}.mp3")
                 try:
-                    core._tts_audio(text,audio); ad=_probe_duration(ff,audio,4.2)
+                    production_tts_audio(text,audio); ad=_probe_duration(ff,audio,4.2)
                 except Exception:
                     audio=None; ad=4.2
                 dur=max(3.8,min(7.0,ad+0.25)); durations.append(dur)
@@ -518,7 +518,7 @@ def make_mp4_seller_first(content_id,row,offer):
             print("VIDEO_BUILD",json.dumps({"content_id":content_id,"seller_video":True,"resolution":"1080x1920","fps":30,"duration":round(sum(durations),1),"voice":"ru_RU-ruslan-medium","speech_rate":"length_scale=1.12","text_overlay":False},ensure_ascii=False),flush=True)
             return out,tmp
         out,tmp2=_clean_image_video(content_id,row,offer,tmp,ff)
-        print("VIDEO_BUILD",json.dumps({"content_id":content_id,"seller_video":False,"resolution":"1080x1920","fps":30,"voice":"ru-RU-DmitryNeural","speech_rate":"+7%","text_overlay":False},ensure_ascii=False),flush=True)
+        print("VIDEO_BUILD",json.dumps({"content_id":content_id,"seller_video":False,"resolution":"1080x1920","fps":30,"voice":"ru_RU-ruslan-medium→ru-RU-DmitryNeural","speech_rate":"length_scale=1.12 / +7%","text_overlay":False},ensure_ascii=False),flush=True)
         return out,tmp2
     except Exception as e:
         print("SELLER_VIDEO_BUILD_ERROR",type(e).__name__,str(e),flush=True)

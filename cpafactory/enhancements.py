@@ -231,9 +231,8 @@ def mp4_selftest():
         path,tmp=core._make_mp4(row["id"],row,offer)
         size=os.path.getsize(path)
         _LAST_PREVIEW_VIDEO={"path":path,"tmp":tmp,"content_id":int(row["id"])}
-        result={"status":"ok","content_id":row["id"],"bytes":size,"seller_video":bool(offer.get("video_url") or offer.get("video_url2"))}
-        # Final container-level decode check: verify the actual MP4 can be
-        # decoded by ffmpeg after all audio/video muxing is complete.
+        # Final container-level validation: decode + verify that the finished
+        # MP4 really contains both video and audio streams.
         ff=_ffmpeg_exe()
         if not ff:
             raise RuntimeError("ffmpeg недоступен для финальной проверки MP4")
@@ -241,7 +240,15 @@ def mp4_selftest():
                              capture_output=True,text=True,timeout=180)
         if check.returncode!=0:
             raise RuntimeError("MP4 decode failed: "+check.stderr[-1200:])
-        print("MP4_DECODE_SELFTEST",json.dumps({"status":"ok","content_id":row["id"],"bytes":size},ensure_ascii=False),flush=True)
+        probe=subprocess.run([ff,"-v","error","-show_entries","stream=codec_type,codec_name,width,height,r_frame_rate","-of","json",path],capture_output=True,text=True,timeout=30)
+        if probe.returncode!=0:
+            raise RuntimeError("MP4 probe failed: "+probe.stderr[-800:])
+        streams=json.loads(probe.stdout or "{}").get("streams",[])
+        has_video=any(s.get("codec_type")=="video" for s in streams)
+        has_audio=any(s.get("codec_type")=="audio" for s in streams)
+        if not has_video or not has_audio:
+            raise RuntimeError(f"MP4 streams invalid: video={has_video}, audio={has_audio}")
+        print("MP4_DECODE_SELFTEST",json.dumps({"status":"ok","content_id":row["id"],"bytes":size,"video":has_video,"audio":has_audio,"streams":streams},ensure_ascii=False),flush=True)
         print("MP4_PRODUCTION_SELFTEST",json.dumps(result,ensure_ascii=False),flush=True)
         print("MP4_PREVIEW_READY",json.dumps({"content_id":row["id"],"bytes":size,"url":"/api/preview-video"},ensure_ascii=False),flush=True)
         return result
@@ -526,6 +533,8 @@ def make_mp4_seller_first(content_id,row,offer):
         return _original_make(content_id,row,offer)
 
 core._make_mp4=make_mp4_seller_first
+# Route every legacy/fallback video path through the production TTS chain too.
+core._tts_audio=production_tts_audio
 
 @core.app.get("/api/cpa/status")
 def enhanced_status():

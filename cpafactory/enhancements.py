@@ -492,44 +492,12 @@ def make_mp4_seller_first(content_id,row,offer):
     try:
         ff=_ffmpeg_exe()
         if not ff: return _original_make(content_id,row,offer)
-        _video_progress(8, 'Загрузка видео продавца')
-        video=seller_video(offer,tmp)
-        if video:
-            _video_progress(14, 'Видео продавца найдено, начинаю монтаж')
-            scenes=core.build_content_pack(row,offer)["scenes"]
-            parts=[]; durations=[]; vd=_probe_duration(ff,video,10)
-            total=len(scenes)
-            for i,sc in enumerate(scenes,1):
-                _video_progress(15 + int(72*(i-1)/max(total,1)), f'Сцена {i} из {total}')
-                text=core._video_text(sc.get("text","")); audio=os.path.join(tmp,f"a{i}.mp3")
-                try:
-                    production_tts_audio(text,audio); ad=_probe_duration(ff,audio,4.2)
-                except Exception:
-                    audio=None; ad=4.2
-                dur=max(3.8,min(7.0,ad+0.25)); durations.append(dur)
-                seg=os.path.join(tmp,f"s{i}.mp4")
-                off=0 if vd<=1 else ((i-1)*4.5)%max(vd-1,1)
-                cmd=[ff,"-y","-stream_loop","-1","-ss",f"{off:.2f}","-i",video]
-                if audio: cmd += ["-i",audio]
-                cmd += ["-t",f"{dur:.2f}","-vf",
-                        "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,format=yuv420p",
-                        "-r","30","-map","0:v:0"]
-                if audio: cmd += ["-map","1:a:0"]
-                cmd += ["-c:v","libx264","-preset","veryfast","-b:v","4500k","-maxrate","5000k","-bufsize","10000k"]
-                if audio: cmd += ["-c:a","aac","-b:a","160k","-shortest"]
-                cmd += ["-movflags","+faststart",seg]
-                subprocess.run(cmd,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=120)
-                parts.append(seg)
-            concat=os.path.join(tmp,"concat.txt")
-            with open(concat,"w",encoding="utf-8") as f:
-                for p in parts: f.write("file '"+p.replace("'","'\\''")+"'\n")
-            out=os.path.join(tmp,f"content_{content_id}.mp4")
-            _video_progress(91, 'Сборка финального MP4')
-            subprocess.run([ff,"-y","-f","concat","-safe","0","-i",concat,"-c","copy","-movflags","+faststart",out],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=240)
-            _video_progress(96, 'Проверка готового файла')
-            print("VIDEO_BUILD",json.dumps({"content_id":content_id,"seller_video":True,"resolution":"1080x1920","fps":30,"duration":round(sum(durations),1),"voice":"ru_RU-ruslan-medium","speech_rate":"length_scale=1.12","text_overlay":False},ensure_ascii=False),flush=True)
-            return out,tmp
+        # On Render Free, seller-video transcoding is too expensive and has
+        # repeatedly caused 45-120s FFmpeg timeouts. Use the resource-safe
+        # product-image path for deterministic production generation.
+        _video_progress(8, 'Подготовка медиа товара')
         out,tmp2=_clean_image_video(content_id,row,offer,tmp,ff)
+
         print("VIDEO_BUILD",json.dumps({"content_id":content_id,"seller_video":False,"resolution":"1080x1920","fps":30,"voice":"ru_RU-ruslan-medium→ru-RU-DmitryNeural","speech_rate":"length_scale=1.12 / +7%","text_overlay":False},ensure_ascii=False),flush=True)
         return out,tmp2
     except Exception as e:

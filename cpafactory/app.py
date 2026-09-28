@@ -1,4 +1,4 @@
-import os, re, sqlite3, json, urllib.request, urllib.parse, tempfile, subprocess, shutil, textwrap, zipfile, io, html, threading
+import os, re, sqlite3, json, urllib.request, urllib.parse, tempfile, subprocess, shutil, textwrap, zipfile, io, html, threading, time
 from PIL import Image, ImageDraw, ImageFont
 from urllib.parse import urlencode, urlparse, parse_qsl, urlunparse
 from fastapi import FastAPI, Request, HTTPException, Header

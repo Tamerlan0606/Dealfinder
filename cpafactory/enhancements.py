@@ -451,7 +451,10 @@ def _clean_image_video(content_id,row,offer,tmp,ff):
         if _download(str(u),p,12*1024*1024): paths.append(p)
     if not paths:
         return _original_make(content_id,row,offer)
-    scenes=core.build_content_pack(row,offer)["scenes"]
+    # Short-form production: cap the rendered cut to four scenes.
+    # This keeps the 1080x1920 output while preventing long FFmpeg/TTS jobs
+    # from exhausting the Render Free instance.
+    scenes=core.build_content_pack(row,offer)["scenes"][:4]
     parts=[]; durations=[]
     total=len(scenes)
     _video_progress(14, 'Озвучка и монтаж сцен')

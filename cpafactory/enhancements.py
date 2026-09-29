@@ -189,6 +189,21 @@ def distribution_status():
     return {"mode":"distribution_engine","queue":q,"media_inventory":m,"clicks":int(clicks),"confirmed_sales":int(sales),"commission":float(commission or 0),"channels":CHANNELS}
 
 
+@core.app.get("/api/wordstat/status")
+def wordstat_status():
+    try:
+        import wordstat_monitor
+        wordstat_monitor.init_schema()
+        with wordstat_monitor.db() as c:
+            run=wordstat_monitor.exec_sql(c,"select * from wordstat_runs order by id desc limit 1").fetchone()
+            top=wordstat_monitor.exec_sql(c,"select phrase,count,seed_phrase from wordstat_queries order by run_date desc,count desc limit 20").fetchall()
+        return {"configured":bool(os.getenv("YANDEX_WORDSTAT_API_KEY") and os.getenv("YANDEX_WORDSTAT_FOLDER_ID")),
+                "folder_configured":bool(os.getenv("YANDEX_WORDSTAT_FOLDER_ID")),
+                "last_run":dict(run) if run else None,
+                "top":[dict(x) for x in top]}
+    except Exception as e:
+        return {"configured":False,"error":f"{type(e).__name__}: {e}"}
+
 @core.app.post("/api/wordstat/run")
 def wordstat_run_now(x_admin_token: str|None=Header(default=None)):
     core.require_admin(x_admin_token)

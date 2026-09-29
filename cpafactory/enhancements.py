@@ -467,15 +467,19 @@ def _clean_image_video(content_id,row,offer,tmp,ff):
         narration=core._video_text(str(row.get('script','')))
     audio=os.path.join(tmp,'narration.mp3')
     production_tts_audio(narration,audio)
-    dur=max(5.0,min(60.0,_probe_duration(ff,audio,12.0)+0.35))
+    # Render Free has a hard CPU budget. This is a static-image short, so
+    # encode only a few video frames per second while keeping the requested
+    # 1080x1920 H.264/AAC container. Cap narration to 30s to make production
+    # deterministic instead of allowing long TTS jobs to time out.
+    dur=max(5.0,min(30.0,_probe_duration(ff,audio,12.0)+0.35))
     out=os.path.join(tmp,f'content_{content_id}.mp4')
     _video_progress(45, 'Сборка MP4')
     vf='scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,format=yuv420p'
-    cmd=[ff,'-y','-loop','1','-i',src,'-i',audio,'-t',f'{dur:.2f}','-vf',vf,'-r','24',
-         '-map','0:v:0','-map','1:a:0','-c:v','libx264','-preset','ultrafast','-crf','30',
-         '-maxrate','1800k','-bufsize','3600k','-c:a','aac','-b:a','128k','-shortest',
-         '-movflags','+faststart',out]
-    subprocess.run(cmd,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=90)
+    cmd=[ff,'-y','-loop','1','-i',src,'-i',audio,'-t',f'{dur:.2f}','-vf',vf,'-r','3',
+         '-map','0:v:0','-map','1:a:0','-c:v','libx264','-preset','ultrafast','-tune','stillimage',
+         '-crf','35','-pix_fmt','yuv420p','-g','6','-keyint_min','6','-sc_threshold','0',
+         '-c:a','aac','-b:a','96k','-ar','44100','-shortest','-movflags','+faststart',out]
+    subprocess.run(cmd,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=75)
     _video_progress(96, 'Проверка готового файла')
     return out,tmp
 def make_mp4_seller_first(content_id,row,offer):
@@ -491,7 +495,7 @@ def make_mp4_seller_first(content_id,row,offer):
         _video_progress(8, 'Подготовка медиа товара')
         out,tmp2=_clean_image_video(content_id,row,offer,tmp,ff)
 
-        print("VIDEO_BUILD",json.dumps({"content_id":content_id,"seller_video":False,"resolution":"1080x1920","fps":30,"voice":"ru_RU-ruslan-medium→ru-RU-DmitryNeural","speech_rate":"length_scale=1.12 / +7%","text_overlay":False},ensure_ascii=False),flush=True)
+        print("VIDEO_BUILD",json.dumps({"content_id":content_id,"seller_video":False,"resolution":"1080x1920","fps":3,"voice":"ru_RU-ruslan-medium→ru-RU-DmitryNeural","speech_rate":"length_scale=1.12 / +7%","text_overlay":False},ensure_ascii=False),flush=True)
         return out,tmp2
     except Exception as e:
         print("SELLER_VIDEO_BUILD_ERROR",type(e).__name__,str(e),flush=True)

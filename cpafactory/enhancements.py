@@ -462,6 +462,14 @@ def _clean_image_video(content_id,row,offer,tmp,ff):
     narration=' '.join(core._video_text(sc.get('text','')) for sc in scenes if sc.get('text'))
     if not narration:
         narration=core._video_text(str(row.get('script','')))
+    # Keep Piper input short enough for Render Free CPU. At the target
+    # short-form duration, a few hundred Russian characters are sufficient.
+    narration=str(narration or '').strip()
+    if len(narration)>420:
+        cut=narration[:420]
+        if ' ' in cut:
+            cut=cut.rsplit(' ',1)[0]
+        narration=cut.rstrip(' ,;:')+'.'
     audio=os.path.join(tmp,'narration.mp3')
     production_tts_audio(narration,audio)
     # Render Free has a hard CPU budget. This is a static-image short, so

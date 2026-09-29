@@ -186,6 +186,7 @@ def init():
         c.execute("create index if not exists idx_distribution_content on distribution_queue(content_id)")
 
 
+_AUTOPILOT_LOCK = threading.Lock()
 _AUTOPILOT_INTERVAL = max(900, int(os.getenv("CPA_AUTOPILOT_INTERVAL", "3600") or 3600))
 
 def _autopilot_cycle():

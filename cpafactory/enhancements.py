@@ -125,6 +125,8 @@ def distribution_top(limit=10):
     out.sort(key=lambda x:(x["score"],x["effective_payout"],float(x.get("demand_count") or 0),int(x["id"])),reverse=True)
     return out[:max(1,min(int(limit),50))]
 
+core.cpa_top=distribution_top
+
 CHANNELS=("rutube","vk","telegram","dzen","seo","avito","ads","email_optin")
 
 def build_variants(content_id):

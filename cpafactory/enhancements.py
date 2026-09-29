@@ -83,7 +83,7 @@ core.cpa_import_gdeslon=import_gdeslon_with_media
 
 def _numeric_rate(value):
     if value is None: return 0.0
-    m=re.search(r"(\\d+(?:[.,]\\d+)?)",str(value))
+    m=re.search(r"(\d+(?:[.,]\d+)?)",str(value))
     return float(m.group(1).replace(",", ".")) if m else 0.0
 
 def _effective_payout(r):

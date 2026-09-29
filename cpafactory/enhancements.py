@@ -81,19 +81,48 @@ def import_gdeslon_with_media(x_admin_token: str|None=Header(default=None)):
     return result
 core.cpa_import_gdeslon=import_gdeslon_with_media
 
+def _numeric_rate(value):
+    if value is None: return 0.0
+    m=re.search(r"(\\d+(?:[.,]\\d+)?)",str(value))
+    return float(m.group(1).replace(",", ".")) if m else 0.0
+
+def _effective_payout(r):
+    explicit=float(r.get("commission") or 0)
+    rate=_numeric_rate(r.get("cpa_rate"))
+    price=float(r.get("price") or 0)
+    if explicit > 0: return explicit
+    if rate > 0 and price > 0: return price * rate / 100.0
+    return 0.0
+
+def _traffic_ok(r):
+    raw=str(r.get("traffic_rules") or r.get("traffic_allowed") or "").strip().lower()
+    if not raw: return True
+    prohibited=("forbidden","запрещ","не разреш","prohibited","not allowed")
+    return not any(x in raw for x in prohibited)
+
 def distribution_top(limit=10):
     with core.db() as c:
         rows=c.execute("""select o.*,count(e.id) clicks from offers o left join click_events e on e.offer_id=o.id
           where o.active=true group by o.id""").fetchall()
     out=[]
     for rr in rows:
-        r=dict(rr); media=3 if r.get("video_url") else (2 if r.get("image_url") else 0)
+        r=dict(rr)
+        if not _traffic_ok(r): continue
+        media=3 if r.get("video_url") else (2 if r.get("image_url") else 0)
         if not media: continue
-        epc=float(r.get("epc") or 0); cr=float(r.get("cr") or 0); commission=float(r.get("commission") or 0)
-        demand=float(r.get("demand_count") or 0); clicks=int(r.get("clicks") or 0); price=float(r.get("price") or 0)
-        score=media*2+min(__import__("math").log1p(max(epc,0)),8)*1.2+min(cr,100)*.06+min(commission/1000,5)*.8+min(__import__("math").log1p(max(demand,0)),10)*.25+min(clicks,1000)*.002+(0.2 if price else 0)
-        r["score"]=round(score,4); out.append(r)
-    out.sort(key=lambda x:(x["score"],int(x["id"])),reverse=True)
+        epc=float(r.get("epc") or 0); cr=float(r.get("cr") or 0)
+        demand=float(r.get("demand_count") or 0); clicks=int(r.get("clicks") or 0)
+        payout=_effective_payout(r)
+        score=(media*1.5
+               +min(__import__("math").log1p(max(demand,0)),12)*0.9
+               +min(__import__("math").log1p(max(epc,0)),8)*1.4
+               +min(max(cr,0),100)*0.08
+               +min(__import__("math").log1p(max(payout,0)),12)*0.9
+               +min(clicks,1000)*0.001)
+        r["effective_payout"]=round(payout,2)
+        r["score"]=round(score,4)
+        out.append(r)
+    out.sort(key=lambda x:(x["score"],x["effective_payout"],float(x.get("demand_count") or 0),int(x["id"])),reverse=True)
     return out[:max(1,min(int(limit),50))]
 
 CHANNELS=("rutube","vk","telegram","dzen","seo","avito","ads","email_optin")
@@ -168,5 +197,30 @@ def wordstat_run_now(x_admin_token: str|None=Header(default=None)):
     except Exception as e:
         print("CPA_WORDSTAT_MANUAL_ERROR", type(e).__name__, str(e), flush=True)
         raise HTTPException(500, f"Wordstat run failed: {type(e).__name__}: {e}")
+
+_WORDSTAT_DAILY_LOCK=__import__("threading").Lock()
+_WORDSTAT_DAILY_DATE={"value":None}
+
+def _wordstat_daily_hook():
+    if not os.getenv("YANDEX_WORDSTAT_API_KEY") or not os.getenv("YANDEX_WORDSTAT_FOLDER_ID"):
+        return
+    import datetime, wordstat_monitor
+    today=datetime.datetime.utcnow().date().isoformat()
+    if _WORDSTAT_DAILY_DATE["value"]==today: return
+    if not _WORDSTAT_DAILY_LOCK.acquire(blocking=False): return
+    try:
+        if _WORDSTAT_DAILY_DATE["value"]!=today:
+            _WORDSTAT_DAILY_DATE["value"]=today
+            __import__("threading").Thread(target=wordstat_monitor.run,daemon=True,name="cpa-wordstat-daily").start()
+    finally:
+        _WORDSTAT_DAILY_LOCK.release()
+
+_original_cycle=core._autopilot_cycle
+def _cycle_with_wordstat():
+    result=_original_cycle()
+    try: _wordstat_daily_hook()
+    except Exception as e: print("CPA_WORDSTAT_SCHEDULE_ERROR",type(e).__name__,str(e),flush=True)
+    return result
+core._autopilot_cycle=_cycle_with_wordstat
 
 print("CPA_DISTRIBUTION_ENGINE_VERSION",json.dumps({"version":"2.0","video_generation":"disabled","tts":"disabled","advertiser_media":"original"},ensure_ascii=False),flush=True)

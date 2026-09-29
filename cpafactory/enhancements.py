@@ -245,14 +245,15 @@ def mp4_selftest():
                              capture_output=True,text=True,timeout=180)
         if check.returncode!=0:
             raise RuntimeError("MP4 decode failed: "+check.stderr[-1200:])
-        probe=subprocess.run([ff,"-v","error","-show_entries","stream=codec_type,codec_name,width,height,r_frame_rate","-of","json",path],capture_output=True,text=True,timeout=30)
-        if probe.returncode!=0:
-            raise RuntimeError("MP4 probe failed: "+probe.stderr[-800:])
-        streams=json.loads(probe.stdout or "{}").get("streams",[])
-        has_video=any(s.get("codec_type")=="video" for s in streams)
-        has_audio=any(s.get("codec_type")=="audio" for s in streams)
-        if not has_video or not has_audio:
-            raise RuntimeError(f"MP4 streams invalid: video={has_video}, audio={has_audio}")
+        # This Render FFmpeg build may not ship ffprobe's show_entries option.
+        # Validate each required stream directly with ffmpeg mapping instead.
+        vcheck=subprocess.run([ff,"-v","error","-i",path,"-map","0:v:0","-f","null","-"],capture_output=True,text=True,timeout=30)
+        acheck=subprocess.run([ff,"-v","error","-i",path,"-map","0:a:0","-f","null","-"],capture_output=True,text=True,timeout=30)
+        if vcheck.returncode!=0 or acheck.returncode!=0:
+            raise RuntimeError("MP4 stream validation failed: video="+vcheck.stderr[-500:]+" audio="+acheck.stderr[-500:])
+        streams=[{"codec_type":"video"},{"codec_type":"audio"}]
+        has_video=True
+        has_audio=True
         print("MP4_DECODE_SELFTEST",json.dumps({"status":"ok","content_id":row["id"],"bytes":size,"video":has_video,"audio":has_audio,"streams":streams},ensure_ascii=False),flush=True)
         result={"status":"ok","content_id":row["id"],"bytes":size}
         print("MP4_PRODUCTION_SELFTEST",json.dumps(result,ensure_ascii=False),flush=True)

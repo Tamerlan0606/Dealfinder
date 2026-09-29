@@ -455,6 +455,13 @@ def _video_progress(percent, stage):
         except Exception: pass
 
 def _clean_image_video(content_id,row,offer,tmp,ff):
+    # If the advertiser supplies a downloadable video, use that source directly.
+    # This avoids inventing a product image when a real ad creative exists.
+    seller_src=seller_video(offer,tmp)
+    if seller_src:
+        print("ADVERTISER_VIDEO_SELECTED",json.dumps({"content_id":content_id,"path":seller_src},ensure_ascii=False),flush=True)
+        _video_progress(90, 'Видео рекламодателя готово')
+        return seller_src,tmp
     # Render Free-safe production path: one image + one narration + one FFmpeg pass.
     # This avoids per-scene H.264 encodes, which can exceed the free CPU budget.
     _video_progress(10, 'Подготовка медиа товара')

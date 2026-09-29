@@ -37,52 +37,39 @@ def init_schema():
           unique(run_date, phrase, regions, devices))""")
 
 def get_seeds():
-    seeds = set()
+    seeds=[]; seen=set()
+    def add(v):
+        s=_clean_seed(v)
+        if s and s.lower() not in seen:
+            seen.add(s.lower()); seeds.append(s)
     with db() as c:
-        try:
-            rows = exec_sql(c, "select name, category from offers where active=true order by coalesce(demand_count,0) desc, coalesce(epc,0) desc limit %s", (MAX_SEEDS * 2,)).fetchall()
-        except Exception:
-            rows = []
+        rows=exec_sql(c,"select name,category from offers where active=true order by coalesce(demand_count,0) desc,coalesce(epc,0) desc limit %s",(MAX_SEEDS*3,)).fetchall()
         for r in rows:
-            for v in (r[0], r[1]):
-                if v:
-                    s = re.sub(r"[^0-9A-Za-zА-Яа-яЁё -]+", " ", str(v))
-                    s = re.sub(r"\\s+", " ", s).strip()
-                    if len(s) >= 2:
-                        seeds.add(s[:200])
-    for s in os.getenv("YANDEX_WORDSTAT_EXTRA_SEEDS", "").split("|"):
-        s = re.sub(r"\\s+", " ", s).strip()
-        if len(s) >= 2:
-            seeds.add(s[:200])
-    return list(seeds)[:MAX_SEEDS]
+            add(r["name"]); add(r["category"])
+    for v in os.getenv("YANDEX_WORDSTAT_EXTRA_SEEDS","").split("|"): add(v)
+    for v in os.getenv("YANDEX_WORDSTAT_MARKET_SEEDS","стройка|ремонт|инструмент|строительная техника|дом|авто|электроника|смартфоны|компьютеры|товары для бизнеса|оборудование").split("|"): add(v)
+    return seeds[:MAX_SEEDS]
+
+def _http_error(e):
+    body=""
+    try: body=e.read(3000).decode("utf-8","replace")
+    except Exception: pass
+    return f"HTTP {getattr(e,'code','?')}: {body[:3000] or str(e)}"
 
 def request_top(phrase):
-    if not FOLDER_ID:
-        raise RuntimeError("YANDEX_WORDSTAT_FOLDER_ID is not configured")
-    body = {
-        "folderId": FOLDER_ID,
-        "phrase": phrase,
-        "numPhrases": TOP_PER_SEED,
-        "regions": REGION_IDS,
-        "devices": DEVICES,
-    }
-    req = urllib.request.Request(
-        WORDSTAT_URL,
-        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
-        headers={
-            "Authorization": "Api-Key " + os.environ["YANDEX_WORDSTAT_API_KEY"],
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "User-Agent": "CPAFactory/3.0",
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return json.loads(r.read().decode("utf-8"))
+    if not FOLDER_ID: raise RuntimeError("YANDEX_WORDSTAT_FOLDER_ID is not configured")
+    token=os.getenv("YANDEX_WORDSTAT_API_KEY","").strip()
+    if not token: raise RuntimeError("YANDEX_WORDSTAT_API_KEY is not configured")
+    body={"folderId":FOLDER_ID,"phrase":phrase,"numPhrases":TOP_PER_SEED,"regions":REGION_IDS,"devices":DEVICES}
+    req=urllib.request.Request(WORDSTAT_URL,data=json.dumps(body,ensure_ascii=False).encode("utf-8"),headers={"Authorization":"Api-Key "+token,"Content-Type":"application/json","Accept":"application/json","User-Agent":"CPAFactory/4.0"},method="POST")
+    try:
+        with urllib.request.urlopen(req,timeout=30) as r: return json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e: raise RuntimeError(_http_error(e))
+    except urllib.error.URLError as e: raise RuntimeError(f"Network error: {e}")
 
 def _items(data):
     # Keep compatibility with minor response-shape changes.
-    for key in ("topRequests", "top_requests", "phrases", "results"):
+    for key in ("results", "topRequests", "top_requests", "phrases"):
         value = data.get(key)
         if isinstance(value, list):
             return value

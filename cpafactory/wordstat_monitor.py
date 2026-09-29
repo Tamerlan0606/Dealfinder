@@ -7,7 +7,7 @@ except Exception:
 
 # Current Yandex Wordstat API is exposed through Yandex Search API.
 WORDSTAT_URL = os.getenv("YANDEX_WORDSTAT_URL", "https://searchapi.api.cloud.yandex.net/v2/wordstat/topRequests")
-FOLDER_ID = os.getenv("YANDEX_WORDSTAT_FOLDER_ID") or os.getenv("YANDEX_FOLDER_ID") or ""
+FOLDER_ID = os.getenv("YANDEX_WORDSTAT_FOLDER_ID") or os.getenv("YANDEX_FOLDER_ID") or os.getenv("YC_FOLDER_ID") or ""
 REGION_IDS = [x.strip() for x in os.getenv("YANDEX_WORDSTAT_REGIONS", "225").split(",") if x.strip()]
 DEVICES = [x.strip() for x in os.getenv("YANDEX_WORDSTAT_DEVICES", "DEVICE_ALL").split(",") if x.strip()]
 MAX_SEEDS = max(1, min(int(os.getenv("YANDEX_WORDSTAT_MAX_SEEDS", "30") or 30), 100))

@@ -452,13 +452,9 @@ def _clean_image_video(content_id,row,offer,tmp,ff):
         if _download(str(u),p,12*1024*1024):
             src=p; break
     if not src:
-        src=os.path.join(tmp,'placeholder.png')
-        from PIL import Image, ImageDraw
-        im=Image.new('RGB',(1080,1920),(24,24,28))
-        d=ImageDraw.Draw(im)
-        d.text((90,820),'CPA Factory',fill=(245,245,245))
-        d.text((90,900),'Товар из партнёрской сети',fill=(190,190,190))
-        im.save(src,'PNG')
+        # No Pillow dependency is required for the fallback: FFmpeg itself
+        # supplies a deterministic vertical background source.
+        src=None
     _video_progress(20, 'Озвучка')
     pack=core.build_content_pack(row,offer)
     scenes=pack.get('scenes') or []
@@ -475,7 +471,8 @@ def _clean_image_video(content_id,row,offer,tmp,ff):
     out=os.path.join(tmp,f'content_{content_id}.mp4')
     _video_progress(45, 'Сборка MP4')
     vf='scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,format=yuv420p'
-    cmd=[ff,'-y','-loop','1','-i',src,'-i',audio,'-t',f'{dur:.2f}','-vf',vf,'-r','3',
+    video_input=['-f','lavfi','-i','color=c=0x18181c:s=1080x1920:r=3'] if src is None else ['-loop','1','-i',src]
+    cmd=[ff,'-y',*video_input,'-i',audio,'-t',f'{dur:.2f}','-vf',vf,'-r','3',
          '-map','0:v:0','-map','1:a:0','-c:v','libx264','-preset','ultrafast','-tune','stillimage',
          '-crf','35','-pix_fmt','yuv420p','-g','6','-keyint_min','6','-sc_threshold','0',
          '-c:a','aac','-b:a','96k','-ar','44100','-shortest','-movflags','+faststart',out]

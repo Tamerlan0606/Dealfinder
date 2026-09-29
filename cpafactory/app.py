@@ -505,17 +505,25 @@ def _pipeline_run():
         import enhancements
         print("CPA_PIPELINE_STAGE", json.dumps({"stage":"start"}, ensure_ascii=False), flush=True)
         # Refresh inventory when possible; failures must not destroy an existing inventory.
-        try:
-            imported = cpa_import_gdeslon(ADMIN_TOKEN or None)
-        except Exception as e:
-            print("CPA_GDESLON_REFRESH_ERROR", type(e).__name__, str(e), flush=True)
-            imported = {"status":"refresh_error","error":f"{type(e).__name__}: {e}"}
+        imported=[]
+        if os.getenv("GDESLON_API_TOKEN","").strip():
+            try:
+                imported.append(cpa_import_gdeslon(ADMIN_TOKEN))
+            except Exception as e:
+                print("CPA_GDESLON_REFRESH_ERROR", type(e).__name__, str(e), flush=True)
+                imported.append({"source":"gdeslon","status":"refresh_error","error":f"{type(e).__name__}: {e}"})
+        if os.getenv("ADMITAD_ACCESS_TOKEN","").strip() and os.getenv("ADMITAD_WEBSITE_ID","").strip():
+            try:
+                imported.append(cpa_import(ADMIN_TOKEN))
+            except Exception as e:
+                print("CPA_ADMITAD_REFRESH_ERROR", type(e).__name__, str(e), flush=True)
+                imported.append({"source":"admitad","status":"refresh_error","error":f"{type(e).__name__}: {e}"})
         with db() as c:
             active=int(c.execute("select count(*) n from offers where active=true").fetchone()["n"])
         if active == 0:
             msg="Нет активных офферов после импорта"
             with db() as c: c.execute("insert into pipeline_runs(status,message) values(%s,%s)",("empty",msg))
-            return {"status":"empty","message":msg,"import":imported}
+            return {"status":"empty","message":msg,"imports":imported}
         top=enhancements.distribution_top(1)
         if not top:
             msg="Нет офферов с допустимым рекламным материалом"

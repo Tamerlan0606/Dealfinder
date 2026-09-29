@@ -342,16 +342,15 @@ def _piper_audio(text,out_path):
     return out_path
 
 def production_tts_audio(text,out_path):
-    # Prefer lightweight network TTS on Render Free; keep local Piper last.
+    # Male Russian news-style voice: Piper Ruslan. gTTS is only a last
+    # fallback because its Russian voice is not suitable for the requested
+    # announcer character.
     try:
-        from gtts import gTTS
-        gTTS(text=str(text or ''),lang='ru',slow=False).save(out_path)
-        if not os.path.exists(out_path) or os.path.getsize(out_path)<1000:
-            raise RuntimeError("gTTS produced no usable audio")
-        print("GTTS_OK",json.dumps({"voice":"ru","bytes":os.path.getsize(out_path)},ensure_ascii=False),flush=True)
-        return out_path
+        result=_piper_audio(text,out_path)
+        print("PIPER_TTS_OK",json.dumps({"voice":"ru_RU-ruslan-medium","style":"news_male","bytes":os.path.getsize(result)},ensure_ascii=False),flush=True)
+        return result
     except Exception as ex:
-        print("GTTS_FALLBACK",type(ex).__name__,str(ex),flush=True)
+        print("PIPER_TTS_FALLBACK",type(ex).__name__,str(ex),flush=True)
     try:
         result=_edge_tts_audio(text,out_path)
         print("EDGE_TTS_OK",json.dumps({"voice":"ru-RU-DmitryNeural","bytes":os.path.getsize(result)},ensure_ascii=False),flush=True)
@@ -478,8 +477,10 @@ def _clean_image_video(content_id,row,offer,tmp,ff):
     # Keep Piper input short enough for Render Free CPU. At the target
     # short-form duration, a few hundred Russian characters are sufficient.
     narration=str(narration or '').strip()
-    if len(narration)>420:
-        cut=narration[:420]
+    # Keep the whole spoken sentence inside the clip; never cut audio at a
+    # fixed video duration in the middle of a word.
+    if len(narration)>300:
+        cut=narration[:300]
         if ' ' in cut:
             cut=cut.rsplit(' ',1)[0]
         narration=cut.rstrip(' ,;:')+'.'
@@ -489,7 +490,7 @@ def _clean_image_video(content_id,row,offer,tmp,ff):
     # encode only a few video frames per second while keeping the requested
     # 1080x1920 H.264/AAC container. Cap narration to 30s to make production
     # deterministic instead of allowing long TTS jobs to time out.
-    dur=max(5.0,min(15.0,_probe_duration(ff,audio,12.0)+0.35))
+    dur=max(5.0,_probe_duration(ff,audio,12.0)+0.20)
     out=os.path.join(tmp,f'content_{content_id}.mp4')
     _video_progress(45, 'Сборка MP4')
     vf='scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,format=yuv420p'

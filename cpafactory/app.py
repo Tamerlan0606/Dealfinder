@@ -385,14 +385,15 @@ def cpa_import_gdeslon(x_admin_token: str | None = Header(default=None)):
             },ensure_ascii=False)[:12000]
             existing=c.execute("select id from offers where source='gdeslon' and external_id=%s",(str(oid),)).fetchone()
             if existing:
-                c.execute("""update offers set name=%s,merchant=%s,price=%s,tracking_url=%s,traffic_rules=%s,active=true,site_url=%s,image_url=%s where id=%s""",
-                          (name,"Где Слон?",price,link,rules,link,v.get("image_url"),existing["id"]))
+                c.execute("""update offers set name=%s,merchant=%s,price=%s,tracking_url=%s,traffic_rules=%s,
+                  active=true,site_url=%s,image_url=%s,description=%s,category=%s where id=%s""",
+                  (name,"Где Слон?",price,link,rules,link,v.get("image_url"),v.get("description") or "",v.get("category_id") or "",existing["id"]))
                 updated+=1
             else:
                 img_url=v.get("image_url") or ""
-                c.execute("""insert into offers(name,merchant,price,commission,tracking_url,traffic_rules,active,source,external_id,rating,epc,cr,cpa_rate,site_url,image_url)
-                    values(%s,%s,%s,0,%s,%s,true,'gdeslon',%s,0,0,0,'',%s,%s)""",
-                    (name,"Где Слон?",price,link,rules,str(oid),link,img_url))
+                c.execute("""insert into offers(name,merchant,price,commission,tracking_url,traffic_rules,active,source,external_id,rating,epc,cr,cpa_rate,site_url,image_url,description,category)
+                    values(%s,%s,%s,0,%s,%s,true,'gdeslon',%s,0,0,0,'',%s,%s,%s,%s)""",
+                    (name,"Где Слон?",price,link,rules,str(oid),link,img_url,v.get("description") or "",v.get("category_id") or ""))
                 added+=1
     return {"status":"ok","source":"gdeslon","api":"xml","received":len(items),"added":added,"updated":updated,"skipped":skipped,"query":query,"page":page,"limit":limit}
 

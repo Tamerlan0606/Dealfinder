@@ -148,6 +148,40 @@ def init():
             c.execute("alter table content add column if not exists scenes text")
             c.execute("alter table content add column if not exists thumbnail_prompt text")
         c.execute("create unique index if not exists uq_offers_source_external on offers(source,external_id) where external_id is not null")
+        # CPA distribution engine schema (media, landing, channel plans, conversion tracking)
+        for stmt in [
+            "alter table offers add column description text",
+            "alter table offers add column category text",
+            "alter table offers add column old_price real default 0",
+            "alter table offers add column discount text",
+            "alter table offers add column media_checked_at text",
+            "alter table offers add column media_type text",
+            "alter table offers add column traffic_allowed text",
+            "alter table content add column media_url text",
+            "alter table content add column media_type text",
+            "alter table content add column landing_slug text",
+            "alter table content add column variants_json text",
+            "alter table content add column source_text text",
+        ]:
+            try: c.execute(stmt)
+            except Exception: pass
+        if using_sqlite():
+            c.execute("""create table if not exists distribution_queue(
+              id integer primary key autoincrement, content_id integer references content(id),
+              channel text not null, status text default 'planned', external_id text,
+              external_url text, scheduled_at text, last_error text,
+              created_at text default CURRENT_TIMESTAMP, published_at text
+            )""")
+        else:
+            c.execute("""create table if not exists distribution_queue(
+              id bigserial primary key, content_id int references content(id),
+              channel text not null, status text default 'planned', external_id text,
+              external_url text, scheduled_at timestamptz, last_error text,
+              created_at timestamptz default now(), published_at timestamptz
+            )""")
+        c.execute("create index if not exists idx_distribution_status on distribution_queue(status)")
+        c.execute("create index if not exists idx_distribution_content on distribution_queue(content_id)")
+
 
 _AUTOPILOT_LOCK = threading.Lock()
 _VIDEO_JOBS = {}
@@ -220,36 +254,13 @@ def _mp4_selftest():
 @app.on_event("startup")
 def startup():
     init()
-
-    # Enhancement schema must exist before any importer/autopilot thread starts.
-    # Previously GdeSlon could race startup and hit missing video/demand columns.
     try:
         import enhancements
         enhancements.migrate()
     except Exception as e:
         print("CPA_ENHANCEMENTS_MIGRATION_ERROR", type(e).__name__, str(e), flush=True)
-
-    # Run one full production video self-test after startup. This is deliberately
-    # asynchronous so health/API availability is never blocked by FFmpeg/TTS.
-    if os.getenv("CPA_STARTUP_MP4_SELFTEST", "1").strip().lower() not in {"0", "false", "no", "off"}:
-        def _startup_mp4_check():
-            time.sleep(8)
-            try:
-                import enhancements
-                print("CPA_STARTUP_MP4_SELFTEST_START", flush=True)
-                # Use the deterministic deep production path: it waits for GdeSlon,
-                # creates real content when needed, builds the MP4, and validates
-                # the final container. Direct mp4_selftest() can return no_content
-                # during a cold start before the importer has populated the DB.
-                enhancements._deep_boot()
-                print("CPA_STARTUP_MP4_SELFTEST_RESULT", "deep_boot_finished", flush=True)
-            except Exception as e:
-                print("CPA_STARTUP_MP4_SELFTEST_ERROR", type(e).__name__, str(e), flush=True)
-        threading.Thread(target=_startup_mp4_check, daemon=True, name="cpa-startup-mp4-selftest").start()
-
-    if os.getenv("CPA_AUTOPILOT_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}:
-        # One orchestrator owns imports + content generation. Running a separate
-        # GdeSlon importer in parallel caused UNIQUE conflicts on source/external_id.
+    print("CPA_FACTORY_MODE", json.dumps({"mode":"distribution_engine","video_generation":"disabled","tts":"disabled"}, ensure_ascii=False), flush=True)
+    if os.getenv("CPA_AUTOPILOT_ENABLED", "1").strip().lower() not in {"0","false","no","off"}:
         threading.Thread(target=_autopilot_loop, daemon=True, name="cpa-autopilot").start()
 
 
@@ -279,6 +290,16 @@ def go(offer_id: int, content_id: int = 0):
                   (offer_id, content_id or None, subid))
         c.execute("update content set clicks=clicks+1 where id=%s", (content_id,)) if content_id else None
     return RedirectResponse(add_tracking(offer["tracking_url"], subid), status_code=302)
+
+@app.get("/r/{content_id}")
+def tracked_redirect(content_id:int, source:str="direct", channel:str="unknown"):
+    with db() as c:
+        row=c.execute("select c.id,c.offer_id,o.tracking_url,o.active from content c join offers o on o.id=c.offer_id where c.id=%s",(content_id,)).fetchone()
+        if not row or not row["active"] or not row["tracking_url"]: raise HTTPException(404,"Материал не найден")
+        subid=f"cf_{content_id}_{re.sub(r'[^a-zA-Z0-9_-]','',str(source))[:30]}_{re.sub(r'[^a-zA-Z0-9_-]','',str(channel))[:30]}"
+        c.execute("insert into click_events(offer_id,content_id,subid) values(%s,%s,%s)",(row["offer_id"],content_id,subid))
+        c.execute("update content set clicks=clicks+1 where id=%s",(content_id,))
+    return RedirectResponse(add_tracking(row["tracking_url"],subid),status_code=302)
 
 @app.get("/api/offers")
 def offers():
@@ -523,94 +544,53 @@ def pipeline_status():
 
 def _pipeline_run():
     try:
+        import enhancements
         print("CPA_PIPELINE_STAGE", json.dumps({"stage":"start"}, ensure_ascii=False), flush=True)
+        # Refresh inventory when possible; failures must not destroy an existing inventory.
+        try:
+            imported = cpa_import_gdeslon(ADMIN_TOKEN or None)
+        except Exception as e:
+            print("CPA_GDESLON_REFRESH_ERROR", type(e).__name__, str(e), flush=True)
+            imported = {"status":"refresh_error","error":f"{type(e).__name__}: {e}"}
         with db() as c:
-            active_before=int(c.execute("select count(*) n from offers where active=true").fetchone()["n"])
-        print("CPA_PIPELINE_STAGE", json.dumps({"stage":"inventory","active_offers":active_before}, ensure_ascii=False), flush=True)
-        # Content generation must never depend on a live affiliate-network HTTP
-        # request. Importers populate the inventory separately; the pipeline
-        # consumes the already validated inventory. Only bootstrap from GdeSlon
-        # when the database is genuinely empty.
-        if active_before > 0:
-            imported={"status":"inventory_ready","active_offers":active_before}
-        else:
-            print("CPA_PIPELINE_STAGE", json.dumps({"stage":"gdeslon_start"}, ensure_ascii=False), flush=True)
-            try:
-                imported = cpa_import_gdeslon(ADMIN_TOKEN)
-            except Exception as e:
-                print("CPA_PIPELINE_STAGE", json.dumps({"stage":"gdeslon_error","error":f"{type(e).__name__}: {e}"}, ensure_ascii=False), flush=True)
-                imported = {"status":"error"}
-            print("CPA_PIPELINE_STAGE", json.dumps({"stage":"gdeslon_done","status":imported.get("status"),"added":imported.get("added",0),"updated":imported.get("updated",0)}, ensure_ascii=False), flush=True)
-        if imported.get("status") == "not_configured":
-            msg = "Не подключена CPA-сеть: Admitad или Где Слон?"
-            with db() as c:
-                c.execute("insert into pipeline_runs(status,message) values(%s,%s)", ("not_configured", msg))
-            return {"status":"not_configured","message":msg}
-        print("CPA_PIPELINE_STAGE", json.dumps({"stage":"top_start"}, ensure_ascii=False), flush=True)
-        top = cpa_top(1)
-        # Prefer offers with an advertiser-supplied downloadable video.
-        with db() as c:
-            video_rows=c.execute("""select o.id
-              from offers o
-              where o.active=true and coalesce(o.video_url,'') <> ''
-              limit 100""").fetchall()
-        if video_rows:
-            ranked=cpa_top(50)
-            video_ids={int(r["id"]) for r in video_rows}
-            top=[r for r in ranked if int(r["id"]) in video_ids][:1]
-        print("CPA_PIPELINE_STAGE", json.dumps({"stage":"top_done","count":len(top),"video_only":bool(video_rows)}, ensure_ascii=False), flush=True)
+            active=int(c.execute("select count(*) n from offers where active=true").fetchone()["n"])
+        if active == 0:
+            msg="Нет активных офферов после импорта"
+            with db() as c: c.execute("insert into pipeline_runs(status,message) values(%s,%s)",("empty",msg))
+            return {"status":"empty","message":msg,"import":imported}
+        top=enhancements.distribution_top(1)
         if not top:
-            msg = "После импорта нет активных офферов"
-            with db() as c:
-                c.execute("insert into pipeline_runs(status,message) values(%s,%s)", ("empty", msg))
+            msg="Нет офферов с допустимым рекламным материалом"
+            with db() as c: c.execute("insert into pipeline_runs(status,message) values(%s,%s)",("empty",msg))
             return {"status":"empty","message":msg}
-        o = top[0]
-        print("CPA_PIPELINE_STAGE", json.dumps({"stage":"selected","offer_id":int(o["id"])}, ensure_ascii=False), flush=True)
-        offer_id = int(o["id"])
-        name = o["name"]
-        price = o["price"] or 0
-        price_label = f"{price:g} ₽" if price else "цена уточняется"
-        cpa_rate = o["cpa_rate"] or ""
-        rate_text = f"{cpa_rate}%" if cpa_rate and "%" not in str(cpa_rate) else str(cpa_rate)
-        title = f"{name}: стоит ли покупать? Цена {price_label}"
-        # Avoid generating the same offer repeatedly within 24 hours.
+        o=top[0]; offer_id=int(o["id"]); name=str(o["name"] or "товар"); price=float(o["price"] or 0)
+        media_url=str(o.get("video_url") or o.get("image_url") or "")
+        media_type="video" if o.get("video_url") else ("image" if o.get("image_url") else "")
+        if not media_url:
+            return {"status":"skipped","offer_id":offer_id,"message":"Нет рекламного видео или фото"}
         with db() as c:
-            if using_sqlite():
-                recent = c.execute("""select id from content
-                  where offer_id=%s and created_at > datetime('now','-24 hours') limit 1""",(offer_id,)).fetchone()
-            else:
-                recent = c.execute("""select id from content
-                  where offer_id=%s and created_at > now()-interval '24 hours' limit 1""",(offer_id,)).fetchone()
+            if using_sqlite(): recent=c.execute("select id from content where offer_id=%s and created_at > datetime('now','-24 hours') limit 1",(offer_id,)).fetchone()
+            else: recent=c.execute("select id from content where offer_id=%s and created_at > now()-interval '24 hours' limit 1",(offer_id,)).fetchone()
             if recent:
-                msg = f"Для оффера уже есть свежий материал: #{recent['id']}"
-                c.execute("insert into pipeline_runs(status,offer_id,message) values(%s,%s,%s)",("skipped",offer_id,msg))
-                return {"status":"skipped","offer_id":offer_id,"content_id":recent["id"],"message":msg}
-            script=(f"Сегодня разбираем товар «{name}». Цена — {price_label}. "
-                    f"Смотрим характеристики, кому он подходит и на что обратить внимание перед покупкой. "
-                    f"Ссылка на актуальную цену — в описании. "
-                    f"Партнёрская ставка по программе: {rate_text or 'уточняется'}.")
-            print("CPA_PIPELINE_STAGE", json.dumps({"stage":"db_insert_start"}, ensure_ascii=False), flush=True)
-            row=c.execute("""insert into content(offer_id,title,script,platform,status)
-              values(%s,%s,%s,'rutube','ready') returning *""",
-              (offer_id,title,script)).fetchone()
+                enhancements.ensure_distribution_plan(int(recent["id"]))
+                return {"status":"skipped","offer_id":offer_id,"content_id":int(recent["id"]),"message":"Свежая карточка уже существует"}
+            price_label=f"{price:g} ₽" if price else "актуальная цена на странице продавца"
+            title=f"{name} — актуальная цена и условия покупки"
+            script=(f"{name}. {price_label}. Проверяйте характеристики, комплектацию, наличие и актуальную цену у продавца перед заказом. "
+                    f"Рекламные материалы предоставлены рекламодателем.")
+            row=c.execute("""insert into content(offer_id,title,script,platform,status,media_url,media_type,source_text)
+              values(%s,%s,%s,'multi','ready',%s,%s,%s) returning *""",(offer_id,title,script,media_url,media_type,str(o.get("description") or ""))).fetchone()
             content_id=int(row["id"])
-            print("CPA_PIPELINE_STAGE", json.dumps({"stage":"content_created","content_id":content_id}, ensure_ascii=False), flush=True)
-            q=c.execute("""insert into publish_queue(content_id,scheduled_at,status)
-              values(%s,null,'queued') returning *""",(content_id,)).fetchone()
-            queue_id=int(q["id"])
-            c.execute("""insert into pipeline_runs(status,offer_id,content_id,queue_id,message)
-              values(%s,%s,%s,%s,%s)""",
-              ("ok",offer_id,content_id,queue_id,"Оффер импортирован, материал создан и поставлен в очередь RUTUBE"))
-        return {"status":"ok","offer_id":offer_id,"content_id":content_id,"queue_id":queue_id,
-                "offer_name":name,"message":"Цикл выполнен"}
-    except HTTPException as e:
-        with db() as c:
-            c.execute("insert into pipeline_runs(status,message) values(%s,%s)",("error",str(e.detail)))
-        raise
+            c.execute("insert into publish_queue(content_id,scheduled_at,status) values(%s,null,'queued')",(content_id,))
+            c.execute("insert into pipeline_runs(status,offer_id,content_id,message) values(%s,%s,%s,%s)",("ok",offer_id,content_id,"Создана CPA-карточка с рекламным материалом и планом распространения"))
+        variants=enhancements.build_variants(content_id)
+        planned=enhancements.ensure_distribution_plan(content_id)
+        return {"status":"ok","offer_id":offer_id,"content_id":content_id,"media_type":media_type,"variants":len(variants),"planned_channels":planned}
     except Exception as e:
-        with db() as c:
-            c.execute("insert into pipeline_runs(status,message) values(%s,%s)",("error",str(e)))
-        raise HTTPException(500, f"Pipeline: {e}")
+        try:
+            with db() as c: c.execute("insert into pipeline_runs(status,message) values(%s,%s)",("error",f"{type(e).__name__}: {e}"))
+        except Exception: pass
+        raise HTTPException(500,f"Pipeline: {e}")
 
 @app.post("/api/pipeline/run")
 def pipeline_run(x_admin_token: str | None = Header(default=None)):
@@ -883,13 +863,10 @@ def _video_job_run(content_id:int, job_id:str):
 @app.get("/api/content/{content_id}/mp4")
 def content_mp4(content_id:int):
     with db() as c:
-        row=c.execute("select id from content where id=%s",(content_id,)).fetchone()
+        row=c.execute("select media_url,media_type from content where id=%s",(content_id,)).fetchone()
     if not row: raise HTTPException(404,"Материал не найден")
-    with _VIDEO_JOBS_LOCK:
-        job_id=__import__("uuid").uuid4().hex
-        _VIDEO_JOBS[job_id]={"status":"queued","content_id":content_id,"progress":0,"stage":"Задача поставлена в очередь"}
-        threading.Thread(target=_video_job_run,args=(content_id,job_id),daemon=True).start()
-    return RedirectResponse(f"/video/{content_id}?job={job_id}",status_code=303)
+    if not row["media_url"]: raise HTTPException(404,"У рекламодателя нет медиа")
+    return RedirectResponse(row["media_url"],status_code=302)
 
 @app.get("/api/video-job/{job_id}")
 def video_job(job_id:str):
@@ -963,23 +940,17 @@ async def add_content(request: Request, x_admin_token: str | None = Header(defau
 @app.post("/api/content/generate")
 async def generate_content(request: Request, x_admin_token: str | None = Header(default=None)):
     require_admin(x_admin_token)
-    x=await request.json()
-    offer_id=int(x["offer_id"])
+    x=await request.json(); offer_id=int(x["offer_id"])
     with db() as c:
-        o=c.execute("select * from offers where id=%s", (offer_id,)).fetchone()
-        if not o: raise HTTPException(404, "Оффер не найден")
-        name=o["name"]; price=o["price"] or 0; commission=o["commission"] or 0
-        price_label=f"{price:g} ₽" if price else "цена уточняется"
-        cpa_rate=o["cpa_rate"] or ""
-        rate_text=f"{cpa_rate}%" if cpa_rate and "%" not in str(cpa_rate) else str(cpa_rate)
-        title=f"{name}: стоит ли покупать? Цена {price_label}"
-        script=(f"Сегодня разбираем товар «{name}». Цена — {price:g} ₽. "
-                f"Смотрим характеристики, кому он подходит и на что обратить внимание перед покупкой. "
-                f"Ссылка на актуальную цену — в описании. Переход по ссылке помогает отследить предложение. "
-                f"Партнёрская ставка по программе: {rate_text or 'уточняется'}.")
-        return c.execute("""insert into content(offer_id,title,script,platform,status)
-          values(%s,%s,%s,%s,'draft') returning *""",
-          (offer_id,title,script,x.get("platform","rutube"))).fetchone()
+        o=c.execute("select * from offers where id=%s",(offer_id,)).fetchone()
+        if not o: raise HTTPException(404,"Оффер не найден")
+        media_url=str(o["video_url"] or o["image_url"] or "")
+        media_type="video" if o["video_url"] else ("image" if o["image_url"] else "")
+        if not media_url: raise HTTPException(409,"У оффера нет рекламного видео или фото")
+        title=f"{o['name']} — актуальная цена и условия покупки"
+        row=c.execute("""insert into content(offer_id,title,script,platform,status,media_url,media_type,source_text) values(%s,%s,%s,%s,'ready',%s,%s,%s) returning *""",(offer_id,title,str(o["description"] or ""),x.get("platform","multi"),media_url,media_type,str(o["description"] or ""))).fetchone()
+    import enhancements; enhancements.build_variants(int(row["id"])); planned=enhancements.ensure_distribution_plan(int(row["id"]))
+    return {"content":dict(row),"planned_channels":planned,"media_type":media_type}
 
 @app.post("/api/content/{content_id}/publish-ready")
 def publish_ready(content_id:int, x_admin_token: str | None = Header(default=None)):

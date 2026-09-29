@@ -341,16 +341,20 @@ def _piper_audio(text,out_path):
     return out_path
 
 def production_tts_audio(text,out_path):
+    # Edge neural TTS is substantially faster on Render Free than local
+    # Piper inference. Piper remains a deterministic fallback.
+    try:
+        result=_edge_tts_audio(text,out_path)
+        print("EDGE_TTS_OK",json.dumps({"voice":"ru-RU-DmitryNeural","bytes":os.path.getsize(result)},ensure_ascii=False),flush=True)
+        return result
+    except Exception as ex:
+        print("EDGE_TTS_FALLBACK",type(ex).__name__,str(ex),flush=True)
     try:
         result=_piper_audio(text,out_path)
         print("PIPER_TTS_OK",json.dumps({"voice":"ru_RU-ruslan-medium","bytes":os.path.getsize(result)},ensure_ascii=False),flush=True)
         return result
     except Exception as ex:
         print("PIPER_TTS_FALLBACK",type(ex).__name__,str(ex),flush=True)
-    try:
-        return _edge_tts_audio(text,out_path)
-    except Exception as ex:
-        print("EDGE_TTS_FALLBACK",type(ex).__name__,str(ex),flush=True)
         return core._tts_audio(text,out_path)
 
 # Read direct seller video fields from XML when present.

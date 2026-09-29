@@ -254,6 +254,7 @@ def mp4_selftest():
         if not has_video or not has_audio:
             raise RuntimeError(f"MP4 streams invalid: video={has_video}, audio={has_audio}")
         print("MP4_DECODE_SELFTEST",json.dumps({"status":"ok","content_id":row["id"],"bytes":size,"video":has_video,"audio":has_audio,"streams":streams},ensure_ascii=False),flush=True)
+        result={"status":"ok","content_id":row["id"],"bytes":size}
         print("MP4_PRODUCTION_SELFTEST",json.dumps(result,ensure_ascii=False),flush=True)
         print("MP4_PREVIEW_READY",json.dumps({"content_id":row["id"],"bytes":size,"url":"/api/preview-video"},ensure_ascii=False),flush=True)
         return result
@@ -467,16 +468,16 @@ def _clean_image_video(content_id,row,offer,tmp,ff):
     # encode only a few video frames per second while keeping the requested
     # 1080x1920 H.264/AAC container. Cap narration to 30s to make production
     # deterministic instead of allowing long TTS jobs to time out.
-    dur=max(5.0,min(30.0,_probe_duration(ff,audio,12.0)+0.35))
+    dur=max(5.0,min(15.0,_probe_duration(ff,audio,12.0)+0.35))
     out=os.path.join(tmp,f'content_{content_id}.mp4')
     _video_progress(45, 'Сборка MP4')
     vf='scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,format=yuv420p'
-    video_input=['-f','lavfi','-i','color=c=0x18181c:s=1080x1920:r=3'] if src is None else ['-loop','1','-i',src]
-    cmd=[ff,'-y',*video_input,'-i',audio,'-t',f'{dur:.2f}','-vf',vf,'-r','3',
+    video_input=['-f','lavfi','-i','color=c=0x18181c:s=1080x1920:r=1'] if src is None else ['-loop','1','-i',src]
+    cmd=[ff,'-y',*video_input,'-i',audio,'-t',f'{dur:.2f}','-vf',vf,'-r','1',
          '-map','0:v:0','-map','1:a:0','-c:v','libx264','-preset','ultrafast','-tune','stillimage',
-         '-crf','35','-pix_fmt','yuv420p','-g','6','-keyint_min','6','-sc_threshold','0',
+         '-crf','38','-pix_fmt','yuv420p','-g','2','-keyint_min','2','-sc_threshold','0',
          '-c:a','aac','-b:a','96k','-ar','44100','-shortest','-movflags','+faststart',out]
-    subprocess.run(cmd,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=75)
+    subprocess.run(cmd,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=35)
     _video_progress(96, 'Проверка готового файла')
     return out,tmp
 def make_mp4_seller_first(content_id,row,offer):

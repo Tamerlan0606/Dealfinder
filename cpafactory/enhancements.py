@@ -218,6 +218,22 @@ def wordstat_run_now(x_admin_token: str|None=Header(default=None)):
 _WORDSTAT_DAILY_LOCK=__import__("threading").Lock()
 _WORDSTAT_DAILY_DATE={"value":None}
 
+def _wordstat_daily_worker(today, wordstat_monitor):
+    try:
+        result=wordstat_monitor.run()
+        if result==0:
+            _WORDSTAT_DAILY_DATE["value"]=today
+            print("CPA_WORDSTAT_DAILY_OK",flush=True)
+        else:
+            print("CPA_WORDSTAT_DAILY_RETRY",json.dumps({"date":today,"exit_code":result},ensure_ascii=False),flush=True)
+    except Exception as e:
+        print("CPA_WORDSTAT_DAILY_ERROR",type(e).__name__,str(e),flush=True)
+    finally:
+        try:
+            _WORDSTAT_DAILY_LOCK.release()
+        except Exception:
+            pass
+
 def _wordstat_daily_hook():
     if not os.getenv("YANDEX_WORDSTAT_API_KEY") or not os.getenv("YANDEX_WORDSTAT_FOLDER_ID"):
         return
@@ -225,12 +241,12 @@ def _wordstat_daily_hook():
     today=datetime.datetime.utcnow().date().isoformat()
     if _WORDSTAT_DAILY_DATE["value"]==today: return
     if not _WORDSTAT_DAILY_LOCK.acquire(blocking=False): return
-    try:
-        if _WORDSTAT_DAILY_DATE["value"]!=today:
-            _WORDSTAT_DAILY_DATE["value"]=today
-            __import__("threading").Thread(target=wordstat_monitor.run,daemon=True,name="cpa-wordstat-daily").start()
-    finally:
-        _WORDSTAT_DAILY_LOCK.release()
+    __import__("threading").Thread(
+        target=_wordstat_daily_worker,
+        args=(today,wordstat_monitor),
+        daemon=True,
+        name="cpa-wordstat-daily"
+    ).start()
 
 _original_cycle=core._autopilot_cycle
 def _cycle_with_wordstat():

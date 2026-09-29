@@ -157,4 +157,16 @@ def distribution_status():
         commission=c.execute("select coalesce(sum(amount),0) n from revenue_events where status='approved'").fetchone()["n"]
     return {"mode":"distribution_engine","queue":q,"media_inventory":m,"clicks":int(clicks),"confirmed_sales":int(sales),"commission":float(commission or 0),"channels":CHANNELS}
 
+
+@core.app.post("/api/wordstat/run")
+def wordstat_run_now(x_admin_token: str|None=Header(default=None)):
+    core.require_admin(x_admin_token)
+    try:
+        import wordstat_monitor
+        result = wordstat_monitor.run()
+        return {"status":"ok","exit_code":result}
+    except Exception as e:
+        print("CPA_WORDSTAT_MANUAL_ERROR", type(e).__name__, str(e), flush=True)
+        raise HTTPException(500, f"Wordstat run failed: {type(e).__name__}: {e}")
+
 print("CPA_DISTRIBUTION_ENGINE_VERSION",json.dumps({"version":"2.0","video_generation":"disabled","tts":"disabled","advertiser_media":"original"},ensure_ascii=False),flush=True)

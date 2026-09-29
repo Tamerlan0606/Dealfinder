@@ -1,8 +1,7 @@
-import os, re, sqlite3, json, urllib.request, urllib.parse, tempfile, subprocess, shutil, textwrap, zipfile, io, html, threading, time
-from PIL import Image, ImageDraw, ImageFont
+import os, re, sqlite3, json, urllib.request, urllib.parse, zipfile, io, html, threading, time
 from urllib.parse import urlencode, urlparse, parse_qsl, urlunparse
 from fastapi import FastAPI, Request, HTTPException, Header
-from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse, StreamingResponse, Response
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse, Response
 import psycopg
 from psycopg.rows import dict_row
 
@@ -10,7 +9,9 @@ app = FastAPI(title="CPA Factory")
 ADMIN_TOKEN = os.environ.get("CPA_ADMIN_TOKEN", "")
 
 def require_admin(x_admin_token: str | None):
-    if ADMIN_TOKEN and x_admin_token != ADMIN_TOKEN:
+    if not ADMIN_TOKEN:
+        raise HTTPException(503, "CPA_ADMIN_TOKEN не настроен")
+    if x_admin_token != ADMIN_TOKEN:
         raise HTTPException(401, "Требуется токен администратора")
 
 class SQLiteConn:
@@ -30,6 +31,8 @@ class SQLiteConn:
 
 def db():
     url = os.environ.get("DATABASE_URL", "")
+    if (not url or url.startswith("${{")) and os.getenv("CPA_ALLOW_SQLITE", "0").lower() not in {"1","true","yes"}:
+        raise RuntimeError("DATABASE_URL is required in production; SQLite fallback is disabled")
     if not url or url.startswith("${{"):
         return SQLiteConn("/tmp/cpafactory.db")
     return psycopg.connect(url, row_factory=dict_row)
@@ -183,17 +186,6 @@ def init():
         c.execute("create index if not exists idx_distribution_content on distribution_queue(content_id)")
 
 
-_AUTOPILOT_LOCK = threading.Lock()
-_VIDEO_JOBS = {}
-_VIDEO_JOBS_LOCK = threading.Lock()
-
-def _video_progress(job_id, percent, stage):
-    with _VIDEO_JOBS_LOCK:
-        job = _VIDEO_JOBS.get(job_id)
-        if job:
-            job["progress"] = max(0, min(100, int(percent)))
-            job["stage"] = str(stage)
-
 _AUTOPILOT_INTERVAL = max(900, int(os.getenv("CPA_AUTOPILOT_INTERVAL", "3600") or 3600))
 
 def _autopilot_cycle():
@@ -201,16 +193,6 @@ def _autopilot_cycle():
         print("CPA_AUTOPILOT_CYCLE_START", flush=True)
         result = _pipeline_run()
         print("CPA_AUTOPILOT", json.dumps(result, ensure_ascii=False, default=str), flush=True)
-        if isinstance(result, dict) and result.get("status") in {"ok","skipped"}:
-            # Startup deep self-test owns the production MP4 validation. Do not
-            # launch a second FFmpeg job from the autopilot cycle: on the Free
-            # instance that can double CPU/RAM usage and restart the service.
-            if os.getenv("CPA_STARTUP_MP4_SELFTEST", "1").strip().lower() in {"0","false","no","off"}:
-                try:
-                    import enhancements
-                    threading.Thread(target=enhancements.mp4_selftest, daemon=True, name="cpa-preview-after-pipeline").start()
-                except Exception as e:
-                    print("CPA_PREVIEW_START_ERROR", type(e).__name__, str(e), flush=True)
         return result
     except Exception as e:
         print("CPA_AUTOPILOT_ERROR", type(e).__name__, str(e), flush=True)
@@ -227,30 +209,6 @@ def _autopilot_loop():
                 _AUTOPILOT_LOCK.release()
         time.sleep(_AUTOPILOT_INTERVAL)
 
-def _mp4_selftest():
-    import os, shutil
-    try:
-        row = {
-            "id": 0,
-            "title": "CPA Factory MP4 self-test",
-            "script": "MP4 self-test",
-            "platform": "rutube",
-            "scenes": '[{"time":"00:00-00:02","text":"CPA Factory MP4 test"},{"time":"00:02-00:04","text":"FFmpeg OK"}]'
-        }
-        offer = {"id": 0, "name": "MP4 self-test", "price": 0, "cpa_rate": ""}
-        path, tmp = _make_mp4(0, row, offer)
-        size = os.path.getsize(path)
-        if size < 1000:
-            raise RuntimeError(f"MP4 too small: {size} bytes")
-        print("MP4_SELFTEST", json.dumps({"status":"ok","bytes":size}, ensure_ascii=False), flush=True)
-        shutil.rmtree(tmp, ignore_errors=True)
-        try:
-            os.remove(path)
-        except Exception:
-            pass
-    except Exception as e:
-        print("MP4_SELFTEST", json.dumps({"status":"error","error":f"{type(e).__name__}: {e}"}, ensure_ascii=False), flush=True)
-
 @app.on_event("startup")
 def startup():
     init()
@@ -259,7 +217,7 @@ def startup():
         enhancements.migrate()
     except Exception as e:
         print("CPA_ENHANCEMENTS_MIGRATION_ERROR", type(e).__name__, str(e), flush=True)
-    print("CPA_FACTORY_MODE", json.dumps({"mode":"distribution_engine","video_generation":"disabled","tts":"disabled"}, ensure_ascii=False), flush=True)
+    print("CPA_FACTORY_MODE", json.dumps({"mode":"distribution_engine","video_generation":"removed","tts":"removed","media_source":"advertiser_original"}, ensure_ascii=False), flush=True)
     if os.getenv("CPA_AUTOPILOT_ENABLED", "1").strip().lower() not in {"0","false","no","off"}:
         threading.Thread(target=_autopilot_loop, daemon=True, name="cpa-autopilot").start()
 
@@ -631,221 +589,33 @@ async def import_offers(request: Request, x_admin_token: str | None = Header(def
             added += 1
     return {"added":added}
 
-def _video_text(s):
-    s=re.sub(r'\s+',' ',str(s or '')).strip()
-    return s
-
-def _wrap_lines(text, font, max_width, draw):
-    words=_video_text(text).split()
-    lines=[]; cur=''
-    for w in words:
-        test=(cur+' '+w).strip()
-        if not cur or draw.textbbox((0,0),test,font=font)[2] <= max_width:
-            cur=test
-        else:
-            lines.append(cur); cur=w
-    if cur: lines.append(cur)
-    return lines
-
-def _fit_font(text, font_path, max_size, min_size, max_width, max_height, draw):
-    size=max_size
-    while size >= min_size:
-        f=ImageFont.truetype(font_path,size)
-        lines=_wrap_lines(text,f,max_width,draw)
-        bbox=draw.textbbox((0,0),'Ag',font=f)
-        line_h=bbox[3]-bbox[1]+10
-        if len(lines)*line_h <= max_height:
-            return f,lines,line_h
-        size-=2
-    f=ImageFont.truetype(font_path,min_size)
-    return f,_wrap_lines(text,f,max_width,draw),max(28,min_size+10)
-
-def _download_product_image(offer,tmp):
-    urls=[]
-    for key in ('image_url','image_url2'):
-        u=offer.get(key)
-        if u and str(u).startswith(('http://','https://')): urls.append(str(u))
-    # Last-resort: try the product/landing page and extract og:image.
-    if not urls and offer.get('site_url'):
-        try:
-            req=urllib.request.Request(str(offer['site_url']),headers={'User-Agent':'Mozilla/5.0 CPAFactory/1.0'})
-            with urllib.request.urlopen(req,timeout=10) as r:
-                raw=r.read(400000).decode('utf-8','ignore')
-            m=re.search(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']',raw,re.I)
-            if not m:
-                m=re.search(r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',raw,re.I)
-            if m: urls.append(urllib.parse.urljoin(str(offer['site_url']),html.unescape(m.group(1))))
-        except Exception:
-            pass
-    if not urls: return None
-    try:
-        req=urllib.request.Request(urls[0],headers={'User-Agent':'Mozilla/5.0 CPAFactory/1.0'})
-        with urllib.request.urlopen(req,timeout=15) as r:
-            data=r.read(5*1024*1024)
-        path=os.path.join(tmp,'product.jpg')
-        with open(path,'wb') as f: f.write(data)
-        im=Image.open(path).convert('RGB')
-        im.thumbnail((760,760),Image.Resampling.LANCZOS)
-        canvas=Image.new('RGB',(760,760),'white')
-        canvas.paste(im,((760-im.width)//2,(760-im.height)//2))
-        canvas.save(path,'JPEG',quality=92)
-        return path
-    except Exception:
-        return None
-
-def _tts_audio(text,out_path):
-    try:
-        from gtts import gTTS
-    except Exception:
-        raise HTTPException(503,'Озвучка недоступна: не установлен gTTS')
-    try:
-        gTTS(text=text,lang='ru',slow=False).save(out_path)
-    except Exception as e:
-        raise HTTPException(502,f'Ошибка генерации озвучки: {e}')
-
-def _make_scene_image(scene_text, product_path, index, total, font_path, tmp):
-    im=Image.new('RGB',(720,1280),(14,16,22))
-    d=ImageDraw.Draw(im)
-    # Premium card background and hierarchy.
-    d.rounded_rectangle((28,28,692,1252),radius=34,fill=(24,27,36))
-    d.text((58,58),'CPA FACTORY',font=ImageFont.truetype(font_path,22),fill=(190,196,208))
-    if product_path and os.path.exists(product_path):
-        try:
-            p=Image.open(product_path).convert('RGB')
-            p.thumbnail((590,590),Image.Resampling.LANCZOS)
-            card=(65,125,655,715)
-            d.rounded_rectangle(card,radius=28,fill=(255,255,255))
-            x=card[0]+(card[2]-card[0]-p.width)//2
-            y=card[1]+(card[3]-card[1]-p.height)//2
-            im.paste(p,(x,y))
-        except Exception:
-            pass
-    d.rounded_rectangle((58,750,662,1135),radius=28,fill=(34,38,50))
-    font,lines,line_h=_fit_font(scene_text,font_path,48,28,550,310,d)
-    total_h=len(lines)*line_h
-    y=750+(385-total_h)//2
-    for line in lines:
-        bbox=d.textbbox((0,0),line,font=font)
-        x=(720-(bbox[2]-bbox[0]))//2
-        d.text((x,y),line,font=font,fill=(248,249,251))
-        y+=line_h
-    d.text((58,1175),f'{index}/{total}',font=ImageFont.truetype(font_path,22),fill=(150,158,174))
-    d.rounded_rectangle((150,1180,570,1188),radius=4,fill=(70,76,90))
-    d.rounded_rectangle((150,1180,150+420*index/total,1188),radius=4,fill=(255,255,255))
-    path=os.path.join(tmp,f'scene_{index:02d}.png')
-    im.save(path,'JPEG',quality=92)
-    return path
-
-def _make_mp4(content_id, row, offer):
-    raise HTTPException(410, "Генерация видео отключена: используются только оригинальные рекламные материалы")
+def build_content_pack(row, offer):
+    name=str(offer["name"] or "товар")
+    price=float(offer["price"] or 0)
+    price_label=f"{price:g} ₽" if price else "цена уточняется"
+    rate=offer["cpa_rate"] or ""
+    rate_text=f"{rate}%" if rate and "%" not in str(rate) else str(rate)
+    link=f"/go/{offer['id']}?content_id={row['id']}"
+    description=(f"{name}. {price_label}.\\n\\n"
+                 f"Проверьте характеристики, комплектацию, наличие и актуальные условия у продавца.\\n\\n"
+                 f"Партнёрская ставка: {rate_text or 'уточняется'}.\\n"
+                 f"Партнёрская ссылка: {link}")
+    return {"content_id":int(row["id"]),"offer_id":int(offer["id"]),"title":row["title"],
+            "media_url":offer.get("video_url") or offer.get("image_url") or "",
+            "media_type":"video" if offer.get("video_url") else ("image" if offer.get("image_url") else ""),
+            "variants":json.loads(row.get("variants_json") or "{}") if row.get("variants_json") else {},
+            "description":description,"tracking_link":link,"platform":row["platform"]}
 
 def _make_pack_zip(content_id,row,offer):
     pack=build_content_pack(row,offer)
     z=io.BytesIO()
     with zipfile.ZipFile(z,'w',zipfile.ZIP_DEFLATED) as zz:
-        zz.writestr('description.txt',pack['description'])
-        zz.writestr('variants.json',json.dumps(pack.get('variants',{}),ensure_ascii=False,indent=2))
-        zz.writestr('media_url.txt',str(pack.get('media_url') or ''))
-        zz.writestr('tracking_link.txt',str(pack.get('tracking_link') or ''))
-    z.seek(0); return z
-
-def build_content_pack(row, offer):
-    name = offer["name"] or "товар"
-    price = offer["price"] or 0
-    price_label = f"{price:g} ₽" if price else "цена уточняется"
-    rate = offer["cpa_rate"] or ""
-    rate_text = f"{rate}%" if rate and "%" not in str(rate) else str(rate)
-    link = f"/go/{offer['id']}?content_id={row['id']}"
-    hook = f"СТОП. Вот что важно знать перед покупкой «{name}»."
-    description = (f"Разбираем «{name}»: цена, ключевые характеристики, кому подходит и что проверить перед покупкой.\\n\\n"
-                   f"🔗 Актуальная цена и предложение: {link}\\n\\n"
-                   f"Партнёрская ставка: {rate_text or 'уточняется'}.\\n"
-                   f"Информация об оффере может изменяться продавцом.")
-    cta = f"Актуальная цена и предложение — по ссылке в описании: {link}"
-    scenes = [
-        {"time":"00:00-00:04","text":hook},
-        {"time":"00:04-00:09","text":f"{name}. Цена сейчас — {price_label}."},
-        {"time":"00:09-00:14","text":"Сначала смотрим, что именно вы получаете за эти деньги."},
-        {"time":"00:14-00:19","text":"Ключевые характеристики — коротко и по делу."},
-        {"time":"00:19-00:24","text":"Кому этот товар действительно подходит?"},
-        {"time":"00:24-00:29","text":"Что проверить перед оформлением заказа."},
-        {"time":"00:29-00:34","text":"Цена и условия могут меняться — проверяйте актуальное предложение."},
-        {"time":"00:34-00:39","text":"Сравните комплектацию и характеристики перед оплатой."},
-        {"time":"00:39-00:44","text":"Если характеристики подходят — переходите к актуальному предложению."},
-        {"time":"00:44-00:49","text":"Ссылка на товар находится в описании ролика."},
-        {"time":"00:49-00:55","text":cta},
-        {"time":"00:55-01:00","text":"Сохраните ролик, чтобы быстро вернуться к товару."}
-    ]
-    thumb = f"Премиальная вертикальная обложка 9:16 для RUTUBE: крупно показать реальный товар «{name}», рядом короткий заголовок «Стоит ли покупать?», современный минималистичный дизайн, много воздуха, без мелкого текста."
-    return {"content_id":int(row["id"]),"offer_id":int(offer["id"]),"title":row["title"],"hook":hook,"media_url":offer.get("video_url") or offer.get("image_url") or "","media_type":"video" if offer.get("video_url") else ("image" if offer.get("image_url") else ""),"variants":json.loads(row.get("variants_json") or "{}") if row.get("variants_json") else {},
-            "description":description,"cta":cta,"tracking_link":link,"scenes":scenes,
-            "thumbnail_prompt":thumb,"voice_script":row["script"],"platform":row["platform"]}
-
-def _video_job_run(content_id:int, job_id:str):
-    tmp=None
-    try:
-        _video_progress(job_id, 2, "Запуск генерации")
-        with db() as c:
-            row=c.execute("select * from content where id=%s",(content_id,)).fetchone()
-            if not row: raise RuntimeError("Материал не найден")
-            offer=c.execute("select * from offers where id=%s",(row["offer_id"],)).fetchone()
-            if not offer: raise RuntimeError("Оффер не найден")
-        _video_progress(job_id, 5, "Подготовка материалов")
-        globals()["_VIDEO_PROGRESS_CALLBACK"] = lambda percent, stage: _video_progress(job_id, percent, stage)
-        try:
-            path,tmp=_make_mp4(content_id,row,offer)
-        finally:
-            globals().pop("_VIDEO_PROGRESS_CALLBACK", None)
-        _video_progress(job_id, 98, "Финальная сборка")
-        with _VIDEO_JOBS_LOCK:
-            _VIDEO_JOBS[job_id]={"status":"ready","content_id":content_id,"path":path,"tmp":tmp,"progress":100,"stage":"Видео готово"}
-    except Exception as e:
-        if tmp: shutil.rmtree(tmp,ignore_errors=True)
-        with _VIDEO_JOBS_LOCK:
-            _VIDEO_JOBS[job_id]={"status":"error","content_id":content_id,"error":f"{type(e).__name__}: {e}","progress":0,"stage":"Ошибка"}
-
-@app.get("/api/content/{content_id}/mp4")
-def content_mp4(content_id:int):
-    with db() as c:
-        row=c.execute("select media_url,media_type from content where id=%s",(content_id,)).fetchone()
-    if not row: raise HTTPException(404,"Материал не найден")
-    if not row["media_url"]: raise HTTPException(404,"У рекламодателя нет медиа")
-    return RedirectResponse(row["media_url"],status_code=302)
-
-@app.get("/api/video-job/{job_id}")
-def video_job(job_id:str):
-    with _VIDEO_JOBS_LOCK:
-        job=dict(_VIDEO_JOBS.get(job_id) or {})
-    if not job: raise HTTPException(404,"Задача видео не найдена")
-    if job.get("status")=="ready":
-        return {"status":"ready","video_url":f"/api/video-file/{job_id}"}
-    return {k:v for k,v in job.items() if k not in {"path","tmp"}}
-
-@app.get("/api/video-file/{job_id}")
-def video_file(job_id:str):
-    with _VIDEO_JOBS_LOCK:
-        job=dict(_VIDEO_JOBS.get(job_id) or {})
-    if job.get("status")!="ready": raise HTTPException(409,"Видео ещё не готово")
-    path=job.get("path")
-    if not path or not os.path.exists(path): raise HTTPException(404,"Файл видео больше недоступен")
-    return FileResponse(path,media_type="video/mp4",filename=f"rutube_content_{job.get('content_id','video')}.mp4",content_disposition_type="inline")
-
-@app.get("/video/{content_id}",response_class=HTMLResponse)
-def video_viewer(content_id:int,job:str|None=None):
-    if not job:
-        with db() as c:
-            row=c.execute("select id from content where id=%s",(content_id,)).fetchone()
-        if not row: raise HTTPException(404,"Материал не найден")
-    return HTMLResponse(
-        "<!doctype html><html lang='ru'><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
-        f"<title>Видео #{content_id}</title><body style='font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#111;color:#fff;margin:0;padding:20px'>"
-        f"<h2>Видео #{content_id}</h2><div style='margin:16px 0'><div style='height:14px;background:#333;border-radius:8px;overflow:hidden'><div id='bar' style='height:100%;width:0%;background:#fff;border-radius:8px;transition:width .4s'></div></div><div style='display:flex;justify-content:space-between;margin-top:8px'><b id='pct'>0%</b><span id='s' style='color:#aaa'>Запуск генерации</span></div></div><video id='v' controls playsinline style='width:100%;max-width:720px;max-height:85vh;background:#000;display:none'></video>"
-        f"<script>const job={json.dumps(job or '')};const s=document.getElementById('s'),p=document.getElementById('pct'),b=document.getElementById('bar'),v=document.getElementById('v');"
-        "async function poll(){if(!job){s.textContent='Нет задачи генерации видео';return;}try{const r=await fetch('/api/video-job/'+job);const x=await r.json();"
-        "if(x.progress!==undefined){const n=Math.max(0,Math.min(100,Number(x.progress)||0));p.textContent=n+'%';b.style.width=n+'%';}if(x.stage)s.textContent=x.stage;if(x.status==='ready'){p.textContent='100%';b.style.width='100%';v.src=x.video_url;v.style.display='block';s.textContent='Видео готово';return;}"
-        "if(x.status==='error'){s.textContent='Ошибка: '+(x.error||'неизвестная ошибка');return;}"
-        "s.textContent='Подготавливаю видео…';setTimeout(poll,1500);}catch(e){s.textContent='Связь с сервером прервана. Повторяю…';setTimeout(poll,2000)}}poll();</script></body></html>"
-    )
+        zz.writestr("description.txt",pack["description"])
+        zz.writestr("variants.json",json.dumps(pack.get("variants",{}),ensure_ascii=False,indent=2))
+        zz.writestr("media_url.txt",str(pack.get("media_url") or ""))
+        zz.writestr("tracking_link.txt",str(pack.get("tracking_link") or ""))
+    z.seek(0)
+    return z
 
 @app.get("/api/content/{content_id}/zip")
 def content_zip(content_id:int):
@@ -1024,7 +794,7 @@ async function load(){
  offers.innerHTML=o.length?'<table><tr><th>Товар</th><th>Сеть</th><th>Цена</th><th>Комиссия</th><th>Переходы</th></tr>'+
  o.map(x=>'<tr><td>'+esc(x.name)+'</td><td>'+esc(x.merchant)+'</td><td>'+Number(x.price||0).toLocaleString('ru-RU')+'</td><td>'+Number(x.commission||0).toLocaleString('ru-RU')+' ₽</td><td>'+x.clicks+'</td></tr>').join('')+'</table>':'Пока нет офферов';
  content.innerHTML=c.length?'<table><tr><th>Оффер</th><th>Площадка</th><th>Статус</th><th>Переходы</th><th>Ссылки</th></tr>'+
- c.map(x=>'<tr><td>'+esc(x.offer_name)+'</td><td>'+esc(x.platform)+'</td><td>'+esc(x.status)+'</td><td>'+x.clicks+'</td><td><a href="/go/'+x.offer_id+'?content_id='+x.id+'" target="_blank">тест</a> · <a href="/api/content/'+x.id+'/pack" target="_blank">пакет</a> · <a href="/api/content/'+x.id+'/mp4" target="_blank">MP4</a> · <a href="/api/content/'+x.id+'/zip" target="_blank">ZIP</a></td></tr>').join('')+'</table>':'Пока нет материалов';
+ c.map(x=>'<tr><td>'+esc(x.offer_name)+'</td><td>'+esc(x.platform)+'</td><td>'+esc(x.status)+'</td><td>'+x.clicks+'</td><td><a href="/go/'+x.offer_id+'?content_id='+x.id+'" target="_blank">тест</a> · <a href="/api/content/'+x.id+'/pack" target="_blank">пакет</a> · <a href="/api/content/'+x.id+'/zip" target="_blank">ZIP</a></td></tr>').join('')+'</table>':'Пока нет материалов';
  let q=await (await fetch('/api/publish-queue')).json();
  queue.innerHTML=q.length?'<table><tr><th>Материал</th><th>Дата</th><th>Статус</th><th>RUTUBE</th></tr>'+
  q.map(x=>'<tr><td>'+esc(x.title)+'</td><td>'+esc(x.scheduled_at||'—')+'</td><td>'+esc(x.status)+'</td><td>'+(x.rutube_url?'<a href="'+esc(x.rutube_url)+'" target="_blank">открыть</a>':'—')+'</td></tr>').join('')+'</table>':'Очередь пуста';

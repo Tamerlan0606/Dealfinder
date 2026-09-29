@@ -341,8 +341,16 @@ def _piper_audio(text,out_path):
     return out_path
 
 def production_tts_audio(text,out_path):
-    # Edge neural TTS is substantially faster on Render Free than local
-    # Piper inference. Piper remains a deterministic fallback.
+    # Prefer lightweight network TTS on Render Free; keep local Piper last.
+    try:
+        from gtts import gTTS
+        gTTS(text=str(text or ''),lang='ru',slow=False).save(out_path)
+        if not os.path.exists(out_path) or os.path.getsize(out_path)<1000:
+            raise RuntimeError("gTTS produced no usable audio")
+        print("GTTS_OK",json.dumps({"voice":"ru","bytes":os.path.getsize(out_path)},ensure_ascii=False),flush=True)
+        return out_path
+    except Exception as ex:
+        print("GTTS_FALLBACK",type(ex).__name__,str(ex),flush=True)
     try:
         result=_edge_tts_audio(text,out_path)
         print("EDGE_TTS_OK",json.dumps({"voice":"ru-RU-DmitryNeural","bytes":os.path.getsize(result)},ensure_ascii=False),flush=True)

@@ -737,73 +737,17 @@ def _make_scene_image(scene_text, product_path, index, total, font_path, tmp):
     return path
 
 def _make_mp4(content_id, row, offer):
-    ffmpeg=shutil.which('ffmpeg')
-    if not ffmpeg:
-        try:
-            import imageio_ffmpeg
-            ffmpeg=imageio_ffmpeg.get_ffmpeg_exe()
-        except Exception:
-            ffmpeg=None
-    if not ffmpeg:
-        raise HTTPException(503,'Не удалось получить ffmpeg; MP4 пока недоступен')
-    try:
-        from PIL import Image, ImageDraw, ImageFont
-    except Exception:
-        raise HTTPException(503,'Не установлен Pillow')
-    tmp=tempfile.mkdtemp(prefix='cfvideo_')
-    try:
-        pack=build_content_pack(row,offer)
-        scenes=pack['scenes']
-        font_paths=['/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf','/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf']
-        font_path=next((p for p in font_paths if os.path.exists(p)),None)
-        if not font_path: raise HTTPException(503,'Шрифт для MP4 не найден')
-        product_path=_download_product_image(offer,tmp)
-        image_file=_make_scene_image
-        concat=os.path.join(tmp,'concat.txt')
-        segment_files=[]
-        durations=[]
-        # Keep the video around 60 seconds, but change visuals every ~4-5 seconds.
-        for i,sc in enumerate(scenes,1):
-            text=_video_text(sc.get('text',''))
-            img=image_file(text,product_path,i,len(scenes),font_path,tmp)
-            audio=os.path.join(tmp,f'audio_{i:02d}.mp3')
-            try:
-                _tts_audio(text,audio)
-                probe=subprocess.run([ffmpeg,'-i',audio],capture_output=True,text=True,timeout=15)
-                m=re.search(r'Duration:\s*(\d+):(\d+):(\d+\.\d+)',probe.stderr)
-                audio_dur=float(m.group(1))*3600+float(m.group(2))*60+float(m.group(3)) if m else 3.5
-            except Exception:
-                audio=None; audio_dur=3.5
-            # Target visual cadence: roughly 4-5 sec per slide, while never cutting speech.
-            dur=max(3.8,min(6.0,audio_dur+0.35))
-            seg=os.path.join(tmp,f'segment_{i:02d}.mp4')
-            cmd=[ffmpeg,'-y','-loop','1','-i',img]
-            if audio:
-                cmd += ['-i',audio,'-t',f'{dur:.2f}','-vf','scale=720:1280,format=yuv420p','-r','24','-c:v','libx264','-preset','veryfast','-crf','22','-c:a','aac','-b:a','128k','-shortest',seg]
-            else:
-                cmd += ['-t',f'{dur:.2f}','-vf','scale=720:1280,format=yuv420p','-r','24','-c:v','libx264','-preset','veryfast','-crf','22',seg]
-            subprocess.run(cmd,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=45)
-            segment_files.append(seg); durations.append(dur)
-        with open(concat,'w',encoding='utf-8') as f:
-            for p in segment_files: f.write(f"file '{p}'\n")
-        out=os.path.join(tmp,f'content_{content_id}.mp4')
-        subprocess.run([ffmpeg,'-y','-f','concat','-safe','0','-i',concat,'-c','copy','-movflags','+faststart',out],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=90)
-        print('VIDEO_BUILD',json.dumps({'content_id':content_id,'scenes':len(scenes),'duration':round(sum(durations),1),'product_image':bool(product_path),'voice':True},ensure_ascii=False),flush=True)
-        return out,tmp
-    except subprocess.CalledProcessError as e:
-        raise HTTPException(500,'Ошибка сборки MP4: '+e.stderr.decode('utf-8','ignore')[-800:])
+    raise HTTPException(410, "Генерация видео отключена: используются только оригинальные рекламные материалы")
 
 def _make_pack_zip(content_id,row,offer):
-    mp4,tmp=_make_mp4(content_id,row,offer)
     pack=build_content_pack(row,offer)
     z=io.BytesIO()
     with zipfile.ZipFile(z,'w',zipfile.ZIP_DEFLATED) as zz:
-        zz.write(mp4,arcname=f'content_{content_id}.mp4')
         zz.writestr('description.txt',pack['description'])
-        zz.writestr('voice_script.txt',pack['voice_script'])
-        zz.writestr('scenes.json',json.dumps(pack['scenes'],ensure_ascii=False,indent=2))
-        zz.writestr('thumbnail_prompt.txt',pack['thumbnail_prompt'])
-    shutil.rmtree(tmp,ignore_errors=True); z.seek(0); return z
+        zz.writestr('variants.json',json.dumps(pack.get('variants',{}),ensure_ascii=False,indent=2))
+        zz.writestr('media_url.txt',str(pack.get('media_url') or ''))
+        zz.writestr('tracking_link.txt',str(pack.get('tracking_link') or ''))
+    z.seek(0); return z
 
 def build_content_pack(row, offer):
     name = offer["name"] or "товар"
@@ -833,7 +777,7 @@ def build_content_pack(row, offer):
         {"time":"00:55-01:00","text":"Сохраните ролик, чтобы быстро вернуться к товару."}
     ]
     thumb = f"Премиальная вертикальная обложка 9:16 для RUTUBE: крупно показать реальный товар «{name}», рядом короткий заголовок «Стоит ли покупать?», современный минималистичный дизайн, много воздуха, без мелкого текста."
-    return {"content_id":int(row["id"]),"offer_id":int(offer["id"]),"title":row["title"],"hook":hook,
+    return {"content_id":int(row["id"]),"offer_id":int(offer["id"]),"title":row["title"],"hook":hook,"media_url":offer.get("video_url") or offer.get("image_url") or "","media_type":"video" if offer.get("video_url") else ("image" if offer.get("image_url") else ""),"variants":json.loads(row.get("variants_json") or "{}") if row.get("variants_json") else {},
             "description":description,"cta":cta,"tracking_link":link,"scenes":scenes,
             "thumbnail_prompt":thumb,"voice_script":row["script"],"platform":row["platform"]}
 

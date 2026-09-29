@@ -548,7 +548,17 @@ def _pipeline_run():
             return {"status":"not_configured","message":msg}
         print("CPA_PIPELINE_STAGE", json.dumps({"stage":"top_start"}, ensure_ascii=False), flush=True)
         top = cpa_top(1)
-        print("CPA_PIPELINE_STAGE", json.dumps({"stage":"top_done","count":len(top)}, ensure_ascii=False), flush=True)
+        # Prefer offers with an advertiser-supplied downloadable video.
+        with db() as c:
+            video_rows=c.execute("""select o.id
+              from offers o
+              where o.active=true and coalesce(o.video_url,'') <> ''
+              limit 100""").fetchall()
+        if video_rows:
+            ranked=cpa_top(50)
+            video_ids={int(r["id"]) for r in video_rows}
+            top=[r for r in ranked if int(r["id"]) in video_ids][:1]
+        print("CPA_PIPELINE_STAGE", json.dumps({"stage":"top_done","count":len(top),"video_only":bool(video_rows)}, ensure_ascii=False), flush=True)
         if not top:
             msg = "После импорта нет активных офферов"
             with db() as c:

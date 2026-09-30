@@ -883,10 +883,6 @@ load(); refreshPipelineStatus();
 def home_head():
     return Response(status_code=200)
 
-@app.get("/")
-def home():
-    return HTMLResponse(PAGE)
-
 
 # Load optional production integrations after all core routes/functions are defined.
 try:

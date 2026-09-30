@@ -194,6 +194,14 @@ def _autopilot_cycle():
         print("CPA_AUTOPILOT_CYCLE_START", flush=True)
         result = _pipeline_run()
         print("CPA_AUTOPILOT", json.dumps(result, ensure_ascii=False, default=str), flush=True)
+        # Publish any newly planned Telegram item in the same autopilot cycle.
+        # Import lazily so optional production integrations can finish loading first.
+        try:
+            import enhancements
+            tg = enhancements.publish_telegram(int(os.getenv("TELEGRAM_PUBLISH_BATCH", "1") or 1))
+            print("CPA_TELEGRAM_AFTER_PIPELINE", json.dumps(tg, ensure_ascii=False, default=str), flush=True)
+        except Exception as tg_error:
+            print("CPA_TELEGRAM_AFTER_PIPELINE_ERROR", type(tg_error).__name__, str(tg_error), flush=True)
         return result
     except Exception as e:
         print("CPA_AUTOPILOT_ERROR", type(e).__name__, str(e), flush=True)
@@ -210,9 +218,28 @@ def _autopilot_loop():
                 _AUTOPILOT_LOCK.release()
         time.sleep(_AUTOPILOT_INTERVAL)
 
+def _sync_yandex_market_seller_offer():
+    url=os.getenv("YANDEX_MARKET_SELLER_REFERRAL_URL","").strip()
+    if os.getenv("YANDEX_MARKET_SELLER_ENABLED","0").lower() not in {"1","true","yes","on"} or not url:
+        return
+    payout=float(os.getenv("YANDEX_MARKET_SELLER_PAYOUT_RUB","15000") or 15000)
+    promo=os.getenv("YANDEX_MARKET_SELLER_PROMOCODE","").strip()
+    description="Яндекс Маркет для продавцов: вознаграждение за нового продавца после выполнения условий программы."
+    with db() as c:
+        row=c.execute("select id from offers where source=%s and external_id=%s",("yandex_market_seller","seller_referral")).fetchone()
+        if row:
+            c.execute("update offers set name=%s,merchant=%s,commission=%s,tracking_url=%s,site_url=%s,description=%s,cpa_rate=%s,active=true where id=%s",("Яндекс Маркет для продавцов","Яндекс Маркет",payout,url,url,description,f"{payout:g} RUB / approved seller",row["id"]))
+        else:
+            c.execute("insert into offers(name,merchant,commission,tracking_url,site_url,description,cpa_rate,source,external_id,active) values(%s,%s,%s,%s,%s,%s,%s,%s,%s,true)",("Яндекс Маркет для продавцов","Яндекс Маркет",payout,url,url,description,f"{payout:g} RUB / approved seller","yandex_market_seller","seller_referral"))
+    print("CPA_YANDEX_MARKET_SELLER_SYNCED",json.dumps({"payout":payout,"promocode":promo},ensure_ascii=False),flush=True)
+
 @app.on_event("startup")
 def startup():
     init()
+    try:
+        _sync_yandex_market_seller_offer()
+    except Exception as e:
+        print("CPA_YANDEX_MARKET_SELLER_SYNC_ERROR",type(e).__name__,str(e),flush=True)
     try:
         import enhancements
         enhancements.migrate()
@@ -533,8 +560,9 @@ def _pipeline_run():
             return {"status":"empty","message":msg}
         o=top[0]; offer_id=int(o["id"]); name=str(o["name"] or "товар"); price=float(o["price"] or 0)
         media_url=str(o.get("video_url") or o.get("image_url") or "")
-        media_type="video" if o.get("video_url") else ("image" if o.get("image_url") else "")
-        if not media_url:
+        seller_referral=(str(o.get("source") or "")=="yandex_market_seller")
+        media_type="video" if o.get("video_url") else ("image" if o.get("image_url") else ("text" if seller_referral else ""))
+        if not media_url and not seller_referral:
             return {"status":"skipped","offer_id":offer_id,"message":"Нет рекламного видео или фото"}
         with db() as c:
             if using_sqlite(): recent=c.execute("select id from content where offer_id=%s and created_at > datetime('now','-24 hours') limit 1",(offer_id,)).fetchone()
@@ -882,10 +910,6 @@ load(); refreshPipelineStatus();
 @app.head("/")
 def home_head():
     return Response(status_code=200)
-
-@app.get("/")
-def home():
-    return HTMLResponse(PAGE)
 
 
 # Load optional production integrations after all core routes/functions are defined.

@@ -294,10 +294,91 @@ def offers():
           from offers o left join click_events e on e.offer_id=o.id
           group by o.id order by o.id desc""").fetchall()
 
-def _admitad_get(url: str, token: str):
-    req=urllib.request.Request(url, headers={"Authorization":f"Bearer {token}","Accept":"application/json","User-Agent":"CPAFactory/1.0"})
-    with urllib.request.urlopen(req, timeout=25) as r:
-        return json.loads(r.read().decode("utf-8"))
+_ADMITAD_TOKEN_CACHE={"token":"","expires_at":0.0}
+
+def _admitad_basic_header():
+    raw=os.getenv("ADMITAD_BASE64_HEADER","").strip()
+    if raw:
+        return raw[6:].strip() if raw.lower().startswith("basic ") else raw
+    cid=os.getenv("ADMITAD_CLIENT_ID","").strip()
+    secret=os.getenv("ADMITAD_CLIENT_SECRET","").strip()
+    if not cid or not secret:
+        return ""
+    import base64
+    return base64.b64encode(f"{cid}:{secret}".encode()).decode()
+
+def _admitad_access_token(force=False):
+    now=time.time()
+    cached=_ADMITAD_TOKEN_CACHE
+    if not force and cached["token"] and cached["expires_at"] > now+120:
+        return cached["token"]
+    # Backward compatibility: an explicitly supplied bearer token still works.
+    static=os.getenv("ADMITAD_ACCESS_TOKEN","").strip()
+    if static and not os.getenv("ADMITAD_CLIENT_ID","").strip():
+        return static
+    cid=os.getenv("ADMITAD_CLIENT_ID","").strip()
+    basic=_admitad_basic_header()
+    if not cid or not basic:
+        return ""
+    scopes=os.getenv("ADMITAD_SCOPES","advcampaigns advcampaigns_for_website websites statistics deeplink_generator public_data").strip()
+    body=urllib.parse.urlencode({"grant_type":"client_credentials","client_id":cid,"scope":scopes}).encode()
+    req=urllib.request.Request("https://api.admitad.com/token/",data=body,method="POST",headers={
+        "Authorization":f"Basic {basic}",
+        "Content-Type":"application/x-www-form-urlencoded;charset=UTF-8",
+        "Accept":"application/json",
+        "User-Agent":"CPAFactory/2.1",
+    })
+    with urllib.request.urlopen(req,timeout=25) as r:
+        data=json.loads(r.read().decode("utf-8"))
+    token=str(data.get("access_token") or "").strip()
+    if not token:
+        raise RuntimeError(f"Admitad token response has no access_token: {str(data)[:300]}")
+    expires=max(300,int(data.get("expires_in") or 3600))
+    cached["token"]=token; cached["expires_at"]=now+expires
+    return token
+
+def _admitad_get(url: str, token: str | None = None):
+    token=(token or _admitad_access_token()).strip()
+    if not token:
+        raise RuntimeError("Admitad credentials are not configured")
+    req=urllib.request.Request(url, headers={"Authorization":f"Bearer {token}","Accept":"application/json","User-Agent":"CPAFactory/2.1"})
+    try:
+        with urllib.request.urlopen(req, timeout=25) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        if e.code == 401 and token == _ADMITAD_TOKEN_CACHE.get("token"):
+            token=_admitad_access_token(force=True)
+            req=urllib.request.Request(url, headers={"Authorization":f"Bearer {token}","Accept":"application/json","User-Agent":"CPAFactory/2.1"})
+            with urllib.request.urlopen(req, timeout=25) as r:
+                return json.loads(r.read().decode("utf-8"))
+        raise
+
+def _admitad_website(token: str | None = None):
+    configured=os.getenv("ADMITAD_WEBSITE_ID","").strip()
+    token=token or _admitad_access_token()
+    data=_admitad_get("https://api.admitad.com/websites/v2/",token)
+    items=data.get("results",[]) if isinstance(data,dict) else data
+    items=items or []
+    if configured:
+        for x in items:
+            if str(x.get("id")) == configured:
+                return x
+        return {"id":configured,"name":"configured","status":"unknown"}
+    target=os.getenv("ADMITAD_WEBSITE_MATCH","CPAFactory").lower()
+    candidates=[]
+    for x in items:
+        hay=" ".join(str(x.get(k) or "") for k in ("name","site_url","url")).lower()
+        if "cpafactory" in hay or "t.me/cpafactory" in hay or target in hay:
+            candidates.append(x)
+    if not candidates:
+        candidates=[x for x in items if str(x.get("status") or "").lower()=="active"] or list(items)
+    if not candidates:
+        raise RuntimeError("Admitad returned no publisher ad spaces")
+    candidates.sort(key=lambda x:(str(x.get("status") or "").lower()=="active", bool(x.get("validation_passed")), int(x.get("id") or 0)), reverse=True)
+    return candidates[0]
+
+def _admitad_configured():
+    return bool((os.getenv("ADMITAD_CLIENT_ID") and (os.getenv("ADMITAD_CLIENT_SECRET") or os.getenv("ADMITAD_BASE64_HEADER"))) or os.getenv("ADMITAD_ACCESS_TOKEN"))
 
 def _gdeslon_get(url: str, token: str):
     # Bound both socket latency and response size; an oversized feed must not
@@ -352,12 +433,15 @@ def _first_rate(v):
 @app.get("/api/cpa/import")
 def cpa_import(x_admin_token: str | None = Header(default=None)):
     require_admin(x_admin_token)
-    token=os.getenv("ADMITAD_ACCESS_TOKEN","").strip()
-    website=os.getenv("ADMITAD_WEBSITE_ID","").strip()
-    if not token or not website:
-        return {"status":"not_configured","message":"Нужны ADMITAD_ACCESS_TOKEN и ADMITAD_WEBSITE_ID"}
-    url=f"https://api.admitad.com/advcampaigns/website/{urllib.parse.quote(website,safe='')}/?limit=100&connection_status=active&language=ru"
+    if not _admitad_configured():
+        return {"status":"not_configured","message":"Нужны ADMITAD_CLIENT_ID и ADMITAD_CLIENT_SECRET/ADMITAD_BASE64_HEADER"}
     try:
+        token=_admitad_access_token()
+        website_obj=_admitad_website(token)
+        website=str(website_obj.get("id") or "").strip()
+        if not website:
+            raise RuntimeError("Не удалось определить Admitad website id")
+        url=f"https://api.admitad.com/advcampaigns/website/{urllib.parse.quote(website,safe='')}/?limit=100&connection_status=active&language=ru"
         data=_admitad_get(url,token)
     except Exception as e:
         raise HTTPException(502,f"Admitad API: {e}")
@@ -383,6 +467,28 @@ def cpa_import(x_admin_token: str | None = Header(default=None)):
                     (name,"Admitad",gotolink,rules,str(cid),rating,epc,cr,rate,v.get("site_url")))
                 added+=1
     return {"status":"ok","source":"admitad","received":len(items),"added":added,"updated":updated,"skipped":skipped}
+
+@app.get("/api/cpa/admitad/status")
+def admitad_status():
+    result={"configured":_admitad_configured(),"token_ok":False,"website":None,"active_programs":None}
+    if not result["configured"]:
+        return result
+    try:
+        token=_admitad_access_token()
+        result["token_ok"]=bool(token)
+        website=_admitad_website(token)
+        result["website"]={k:website.get(k) for k in ("id","name","status","site_url","validation_passed","kind") if k in website}
+        wid=str(website.get("id") or "")
+        if wid:
+            data=_admitad_get(f"https://api.admitad.com/advcampaigns/website/{urllib.parse.quote(wid,safe='')}/?limit=1&connection_status=active&language=ru",token)
+            if isinstance(data,dict):
+                result["active_programs"]=(data.get("_meta") or {}).get("count",len(data.get("results") or []))
+            else:
+                result["active_programs"]=len(data or [])
+        return result
+    except Exception as e:
+        result["error"]=f"{type(e).__name__}: {e}"
+        return result
 
 @app.get("/api/cpa/import/gdeslon")
 def cpa_import_gdeslon(x_admin_token: str | None = Header(default=None)):
@@ -464,7 +570,7 @@ def _count_active_offers():
 @app.get("/api/cpa/status")
 def cpa_status():
     return {
-        "admitad_configured":bool(os.getenv("ADMITAD_ACCESS_TOKEN") and os.getenv("ADMITAD_WEBSITE_ID")),
+        "admitad_configured":_admitad_configured(),
         "gdeslon_configured":bool(os.getenv("GDESLON_API_TOKEN")),
         "active_offers": int(_count_active_offers())
     }
@@ -522,7 +628,7 @@ def pipeline_status():
           order by p.id desc limit 1""").fetchone()
     top = cpa_top(1)
     return {
-        "admitad_configured": bool(os.getenv("ADMITAD_ACCESS_TOKEN") and os.getenv("ADMITAD_WEBSITE_ID")),
+        "admitad_configured": _admitad_configured(),
         "gdeslon_configured": bool(os.getenv("GDESLON_API_TOKEN")),
         "active_offers": active, "queued": queued,
         "top_offer": dict(top[0]) if top else None,
@@ -541,7 +647,7 @@ def _pipeline_run():
             except Exception as e:
                 print("CPA_GDESLON_REFRESH_ERROR", type(e).__name__, str(e), flush=True)
                 imported.append({"source":"gdeslon","status":"refresh_error","error":f"{type(e).__name__}: {e}"})
-        if os.getenv("ADMITAD_ACCESS_TOKEN","").strip() and os.getenv("ADMITAD_WEBSITE_ID","").strip():
+        if _admitad_configured():
             try:
                 imported.append(cpa_import(ADMIN_TOKEN))
             except Exception as e:

@@ -65,66 +65,134 @@ def _http_error(e):
     except Exception: pass
     return f"HTTP {getattr(e,'code','?')}: {body[:3000] or str(e)}"
 
+def _api_keys():
+    keys=[]
+    for name in ("YANDEX_WORDSTAT_API_KEY", "YANDEX_SEARCH_API_KEY"):
+        value=os.getenv(name,"").strip()
+        if value and value not in [v for _,v in keys]:
+            keys.append((name,value))
+    return keys
+
 def request_top(phrase):
-    if not FOLDER_ID: raise RuntimeError("YANDEX_WORDSTAT_FOLDER_ID is not configured")
-    token=os.getenv("YANDEX_WORDSTAT_API_KEY","").strip()
-    if not token: raise RuntimeError("YANDEX_WORDSTAT_API_KEY is not configured")
-    body={"folderId":FOLDER_ID,"phrase":phrase,"numPhrases":TOP_PER_SEED,"regions":REGION_IDS,"devices":DEVICES}
-    req=urllib.request.Request(WORDSTAT_URL,data=json.dumps(body,ensure_ascii=False).encode("utf-8"),headers={"Authorization":"Api-Key "+token,"Content-Type":"application/json","Accept":"application/json","User-Agent":"CPAFactory/4.0"},method="POST")
-    try:
-        with urllib.request.urlopen(req,timeout=30) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        raise RuntimeError(_http_error(e))
-    except urllib.error.URLError as e:
-        raise RuntimeError(f"Network error: {e}")
+    if not FOLDER_ID:
+        raise RuntimeError("YANDEX_WORDSTAT_FOLDER_ID is not configured")
+
+    keys=_api_keys()
+    if not keys:
+        raise RuntimeError("YANDEX_WORDSTAT_API_KEY/YANDEX_SEARCH_API_KEY is not configured")
+
+    body={
+        "folderId":FOLDER_ID,
+        "phrase":phrase,
+        "numPhrases":TOP_PER_SEED,
+        "regions":REGION_IDS,
+        "devices":DEVICES
+    }
+    payload=json.dumps(body,ensure_ascii=False).encode("utf-8")
+    auth_errors=[]
+
+    for key_name,token in keys:
+        req=urllib.request.Request(
+            WORDSTAT_URL,
+            data=payload,
+            headers={
+                "Authorization":"Api-Key "+token,
+                "Content-Type":"application/json",
+                "Accept":"application/json",
+                "User-Agent":"CPAFactory/4.1"
+            },
+            method="POST"
+        )
+        try:
+            with urllib.request.urlopen(req,timeout=30) as response:
+                data=json.loads(response.read().decode("utf-8"))
+                if key_name != "YANDEX_WORDSTAT_API_KEY":
+                    print(f"CPA_WORDSTAT_AUTH_FALLBACK_OK key={key_name}",flush=True)
+                return data
+        except urllib.error.HTTPError as e:
+            msg=_http_error(e)
+            if getattr(e,"code",None) in (401,403):
+                auth_errors.append(f"{key_name}: {msg}")
+                continue
+            raise RuntimeError(msg)
+        except urllib.error.URLError as e:
+            raise RuntimeError(f"Network error: {e}")
+
+    raise RuntimeError("Wordstat authentication failed: "+" | ".join(auth_errors))
 
 def _items(data):
     for key in ("results","topRequests","top_requests","phrases"):
         value=data.get(key)
-        if isinstance(value,list): return value
+        if isinstance(value,list):
+            return value
     return []
 
 def _phrase_count(item):
     phrase=item.get("phrase") or item.get("query") or item.get("text") or ""
     count=item.get("count")
-    if count is None: count=item.get("frequency")
-    if count is None: count=item.get("shows")
-    try: count=float(count or 0)
-    except Exception: count=0.0
+    if count is None:
+        count=item.get("frequency")
+    if count is None:
+        count=item.get("shows")
+    try:
+        count=float(count or 0)
+    except Exception:
+        count=0.0
     return str(phrase).strip(),count
 
 def _update_offer_demand(seed,max_count):
-    if max_count<=0: return
+    if max_count<=0:
+        return
     with db() as c:
         exec_sql(c,"update offers set demand_count=%s,demand_checked_at=current_timestamp,yandex_promise=%s where active=true and (lower(name)=lower(%s) or lower(category)=lower(%s))",(max_count,max_count,seed,seed))
 
 def run():
     init_schema()
-    if not os.getenv("YANDEX_WORDSTAT_API_KEY"): raise RuntimeError("YANDEX_WORDSTAT_API_KEY is not configured")
-    if not FOLDER_ID: raise RuntimeError("YANDEX_WORDSTAT_FOLDER_ID is not configured")
+
+    if not _api_keys():
+        raise RuntimeError("YANDEX_WORDSTAT_API_KEY/YANDEX_SEARCH_API_KEY is not configured")
+    if not FOLDER_ID:
+        raise RuntimeError("YANDEX_WORDSTAT_FOLDER_ID is not configured")
+
     run_date=datetime.datetime.utcnow().date().isoformat()
-    seeds=get_seeds(); total=0; errors=[]
+    seeds=get_seeds()
+    total=0
+    errors=[]
+
     with db() as c:
         exec_sql(c,"insert into wordstat_runs(run_date,status,seed_count,result_count) values(%s,'running',%s,0) on conflict(run_date) do update set status='running',seed_count=%s,error=null",(run_date,len(seeds),len(seeds)))
+
     for seed in seeds:
         try:
             data=request_top(seed)
-            items=_items(data); seed_max=0.0
+            items=_items(data)
+            seed_max=0.0
+
             with db() as c:
                 for item in items:
                     phrase,count=_phrase_count(item)
-                    if not phrase: continue
+                    if not phrase:
+                        continue
                     seed_max=max(seed_max,count)
                     exec_sql(c,"insert into wordstat_queries(run_date,seed_phrase,phrase,count,regions,devices) values(%s,%s,%s,%s,%s,%s) on conflict(run_date,phrase,regions,devices) do update set count=excluded.count,seed_phrase=excluded.seed_phrase",(run_date,seed,phrase,count,",".join(REGION_IDS),",".join(DEVICES)))
                     total+=1
+
             _update_offer_demand(seed,seed_max)
             time.sleep(0.05)
+
         except Exception as e:
             errors.append(f"{seed}: {type(e).__name__}: {e}")
+
     with db() as c:
         exec_sql(c,"update wordstat_runs set status=%s,result_count=%s,error=%s where run_date=%s",("ok" if not errors else "partial",total," ".join(errors)[:10000],run_date))
-    result={"status":"ok" if not errors else "partial","date":run_date,"seeds":len(seeds),"results":total,"errors":errors[:10]}
+
+    result={
+        "status":"ok" if not errors else "partial",
+        "date":run_date,
+        "seeds":len(seeds),
+        "results":total,
+        "errors":errors[:10]
+    }
     print(json.dumps(result,ensure_ascii=False),flush=True)
     return 0 if not errors else 2
 

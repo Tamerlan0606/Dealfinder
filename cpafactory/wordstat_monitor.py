@@ -40,6 +40,14 @@ def init_schema():
             exec_sql(c,"create table if not exists wordstat_runs(id bigserial primary key,run_date date unique not null,status text,seed_count integer default 0,result_count integer default 0,error text,created_at timestamptz default now())")
             exec_sql(c,"create table if not exists wordstat_queries(id bigserial primary key,run_date date not null,seed_phrase text,phrase text not null,count double precision default 0,regions text,devices text,source text default 'yandex_wordstat',created_at timestamptz default now(),unique(run_date,phrase,regions,devices))")
 
+def _today_run(run_date):
+    with db() as c:
+        return exec_sql(c,"select status,seed_count,result_count,error from wordstat_runs where run_date=%s",(run_date,)).fetchone()
+
+def _is_rate_limit_error(exc):
+    text=str(exc).lower()
+    return "http 429" in text or "quota limit exceed" in text or "wordstatrequestsperhour" in text
+
 def _clean_seed(v):
     s=re.sub("[^0-9A-Za-zА-Яа-яЁё -]+"," ",str(v or ""))
     s=" ".join(s.split()).strip()
@@ -99,75 +107,57 @@ def _update_offer_demand(seed,max_count):
     with db() as c:
         exec_sql(c,"update offers set demand_count=%s,demand_checked_at=current_timestamp,yandex_promise=%s where active=true and (lower(name)=lower(%s) or lower(category)=lower(%s))",(max_count,max_count,seed,seed))
 
-def _already_ok(run_date):
-    with db() as c:
-        row=exec_sql(c,"select status,result_count from wordstat_runs where run_date=%s",(run_date,)).fetchone()
-    return bool(row and row["status"]=="ok")
-
-def _try_run_lock():
-    """Cross-process lock. PostgreSQL lock is session-scoped; SQLite uses best-effort only."""
-    if using_sqlite():
-        return None, True
-    c=db()
-    row=exec_sql(c,"select pg_try_advisory_lock(%s) as locked",(847261903,)).fetchone()
-    if not row or not row["locked"]:
-        c.close()
-        return None, False
-    return c, True
-
-def _release_run_lock(c):
-    if c is None: return
-    try: exec_sql(c,"select pg_advisory_unlock(%s)",(847261903,))
-    finally: c.close()
-
 def run(force=False):
     init_schema()
-    if not os.getenv("YANDEX_WORDSTAT_API_KEY"): raise RuntimeError("YANDEX_WORDSTAT_API_KEY is not configured")
-    if not FOLDER_ID: raise RuntimeError("YANDEX_WORDSTAT_FOLDER_ID is not configured")
+    if not os.getenv("YANDEX_WORDSTAT_API_KEY"):
+        raise RuntimeError("YANDEX_WORDSTAT_API_KEY is not configured")
+    if not FOLDER_ID:
+        raise RuntimeError("YANDEX_WORDSTAT_FOLDER_ID is not configured")
+
     run_date=datetime.datetime.utcnow().date().isoformat()
-    if not force and _already_ok(run_date):
-        print(json.dumps({"status":"skipped","reason":"already_ok","date":run_date},ensure_ascii=False),flush=True)
-        return 0
-    lock_conn, locked=_try_run_lock()
-    if not locked:
-        print(json.dumps({"status":"skipped","reason":"already_running","date":run_date},ensure_ascii=False),flush=True)
-        return 0
-    try:
-        # Re-check after acquiring the cross-process lock.
-        if not force and _already_ok(run_date):
-            print(json.dumps({"status":"skipped","reason":"already_ok","date":run_date},ensure_ascii=False),flush=True)
-            return 0
-        seeds=get_seeds(); total=0; errors=[]; rate_limited=False
-        with db() as c:
-            exec_sql(c,"insert into wordstat_runs(run_date,status,seed_count,result_count) values(%s,'running',%s,0) on conflict(run_date) do update set status=case when wordstat_runs.status='ok' then 'ok' else 'running' end,seed_count=%s,error=case when wordstat_runs.status='ok' then wordstat_runs.error else null end",(run_date,len(seeds),len(seeds)))
-        for seed in seeds:
-            try:
-                data=request_top(seed)
-                items=_items(data); seed_max=0.0
-                with db() as c:
-                    for item in items:
-                        phrase,count=_phrase_count(item)
-                        if not phrase: continue
-                        seed_max=max(seed_max,count)
-                        exec_sql(c,"insert into wordstat_queries(run_date,seed_phrase,phrase,count,regions,devices) values(%s,%s,%s,%s,%s,%s) on conflict(run_date,phrase,regions,devices) do update set count=excluded.count,seed_phrase=excluded.seed_phrase",(run_date,seed,phrase,count,",".join(REGION_IDS),",".join(DEVICES)))
-                        total+=1
-                _update_offer_demand(seed,seed_max)
-                time.sleep(0.05)
-            except Exception as e:
-                errors.append(f"{seed}: {type(e).__name__}: {e}")
-                if "HTTP 429" in str(e):
-                    rate_limited=True
-                    print("CPA_WORDSTAT_RATE_LIMITED; stopping remaining seeds",flush=True)
-                    break
-        status="ok" if not errors else ("rate_limited" if rate_limited else "partial")
-        with db() as c:
-            # Never destroy a previously successful daily result with a later failed/forced run.
-            exec_sql(c,"update wordstat_runs set status=case when status='ok' and %s<>'ok' then status else %s end,result_count=case when status='ok' and %s<>'ok' then result_count else %s end,error=case when status='ok' and %s<>'ok' then error else %s end where run_date=%s",(status,status,status,total,status," ".join(errors)[:10000],run_date))
-        result={"status":status,"date":run_date,"seeds":len(seeds),"results":total,"errors":errors[:10]}
+    previous=_today_run(run_date)
+    if previous and previous["status"] == "ok" and not force:
+        result={
+            "status":"skipped",
+            "reason":"already_completed_today",
+            "date":run_date,
+            "seeds":int(previous["seed_count"] or 0),
+            "results":int(previous["result_count"] or 0),
+            "errors":[]
+        }
         print(json.dumps(result,ensure_ascii=False),flush=True)
-        return 0 if not errors else 2
-    finally:
-        _release_run_lock(lock_conn)
+        return 0
+
+    seeds=get_seeds(); total=0; errors=[]; rate_limited=False
+    with db() as c:
+        exec_sql(c,"insert into wordstat_runs(run_date,status,seed_count,result_count) values(%s,'running',%s,0) on conflict(run_date) do update set status='running',seed_count=%s,error=null",(run_date,len(seeds),len(seeds)))
+
+    for seed in seeds:
+        try:
+            data=request_top(seed)
+            items=_items(data); seed_max=0.0
+            with db() as c:
+                for item in items:
+                    phrase,count=_phrase_count(item)
+                    if not phrase: continue
+                    seed_max=max(seed_max,count)
+                    exec_sql(c,"insert into wordstat_queries(run_date,seed_phrase,phrase,count,regions,devices) values(%s,%s,%s,%s,%s,%s) on conflict(run_date,phrase,regions,devices) do update set count=excluded.count,seed_phrase=excluded.seed_phrase",(run_date,seed,phrase,count,",".join(REGION_IDS),",".join(DEVICES)))
+                    total+=1
+            _update_offer_demand(seed,seed_max)
+            time.sleep(0.05)
+        except Exception as e:
+            errors.append(f"{seed}: {type(e).__name__}: {e}")
+            if _is_rate_limit_error(e):
+                rate_limited=True
+                print("CPA_WORDSTAT_RATE_LIMITED; stopping remaining seeds",flush=True)
+                break
+
+    status="ok" if not errors else ("rate_limited" if rate_limited else "partial")
+    with db() as c:
+        exec_sql(c,"update wordstat_runs set status=%s,result_count=%s,error=%s where run_date=%s",(status,total," ".join(errors)[:10000],run_date))
+    result={"status":status,"date":run_date,"seeds":len(seeds),"results":total,"errors":errors[:10]}
+    print(json.dumps(result,ensure_ascii=False),flush=True)
+    return 0 if not errors else 2
 
 if __name__=="__main__":
     raise SystemExit(run())

@@ -1,4 +1,4 @@
-import os, re, json, html, urllib.request, urllib.parse
+import os, re, json, html, urllib.request, urllib.parse, time
 from fastapi import Header, HTTPException
 from fastapi.responses import HTMLResponse
 import app as core
@@ -101,6 +101,13 @@ def _traffic_ok(r):
     return not any(x in raw for x in prohibited)
 
 def distribution_top(limit=10):
+    """Rank offers by expected economics, then demand and creative readiness.
+
+    EPC is the strongest observed monetisation signal. When EPC is unavailable,
+    CR * payout is used as a conservative proxy. Demand is logarithmic so a
+    popular low-paying product cannot overwhelm a materially better offer.
+    """
+    import math
     with core.db() as c:
         rows=c.execute("""select o.*,count(e.id) clicks from offers o left join click_events e on e.offer_id=o.id
           where o.active=true group by o.id""").fetchall()
@@ -108,21 +115,30 @@ def distribution_top(limit=10):
     for rr in rows:
         r=dict(rr)
         if not _traffic_ok(r): continue
-        media=3 if r.get("video_url") else (2 if r.get("image_url") else 0)
+        seller_referral=(str(r.get("source") or "")=="yandex_market_seller")
+        media=3 if r.get("video_url") else (2 if r.get("image_url") else (1 if seller_referral else 0))
         if not media: continue
-        epc=float(r.get("epc") or 0); cr=float(r.get("cr") or 0)
-        demand=float(r.get("demand_count") or 0); clicks=int(r.get("clicks") or 0)
-        payout=_effective_payout(r)
-        score=(media*1.5
-               +min(__import__("math").log1p(max(demand,0)),12)*0.9
-               +min(__import__("math").log1p(max(epc,0)),8)*1.4
-               +min(max(cr,0),100)*0.08
-               +min(__import__("math").log1p(max(payout,0)),12)*0.9
-               +min(clicks,1000)*0.001)
+        epc=max(float(r.get("epc") or 0),0.0)
+        cr=max(float(r.get("cr") or 0),0.0)
+        demand=max(float(r.get("demand_count") or 0),0.0)
+        clicks=max(int(r.get("clicks") or 0),0)
+        payout=max(_effective_payout(r),0.0)
+        # Networks commonly expose CR as percent. This proxy is only used when
+        # EPC is absent, preventing payout alone from selecting an unconvertible offer.
+        proxy_epc=(min(cr,100.0)/100.0)*payout if payout else 0.0
+        expected_epc=epc if epc>0 else proxy_epc
+        demand_factor=1.0 + min(math.log1p(demand),12.0)/12.0
+        confidence=1.0 + min(math.log1p(clicks),7.0)*0.03
+        media_factor=1.05 if media==3 else 1.0
+        economic_value=expected_epc*demand_factor*confidence*media_factor
+        # Small tie-break quality term; it cannot dominate actual economics.
+        score=economic_value + min(cr,100.0)*0.0001 + min(math.log1p(payout),12.0)*0.0001
         r["effective_payout"]=round(payout,2)
-        r["score"]=round(score,4)
+        r["expected_epc"]=round(expected_epc,4)
+        r["economic_value"]=round(economic_value,6)
+        r["score"]=round(score,6)
         out.append(r)
-    out.sort(key=lambda x:(x["score"],x["effective_payout"],float(x.get("demand_count") or 0),int(x["id"])),reverse=True)
+    out.sort(key=lambda x:(x["economic_value"],x["expected_epc"],x["effective_payout"],float(x.get("demand_count") or 0),int(x["id"])),reverse=True)
     return out[:max(1,min(int(limit),50))]
 
 core.cpa_top=distribution_top
@@ -189,6 +205,83 @@ def distribution_status():
     return {"mode":"distribution_engine","queue":q,"media_inventory":m,"clicks":int(clicks),"confirmed_sales":int(sales),"commission":float(commission or 0),"channels":CHANNELS}
 
 
+
+
+def _public_base_url():
+    return (os.getenv("CPA_PUBLIC_BASE_URL") or os.getenv("RENDER_EXTERNAL_URL") or "https://cpafactory-web.onrender.com").rstrip("/")
+
+def _telegram_configured():
+    return bool(os.getenv("TELEGRAM_BOT_TOKEN","").strip() and os.getenv("TELEGRAM_CHAT_ID","").strip())
+
+def _telegram_send(text):
+    token=os.getenv("TELEGRAM_BOT_TOKEN","").strip()
+    chat=os.getenv("TELEGRAM_CHAT_ID","").strip()
+    if not token or not chat:
+        raise RuntimeError("TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID are not configured")
+    body=json.dumps({"chat_id":chat,"text":text,"disable_web_page_preview":False},ensure_ascii=False).encode("utf-8")
+    req=urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage",data=body,headers={"Content-Type":"application/json","User-Agent":"CPAFactory/5.0"},method="POST")
+    with urllib.request.urlopen(req,timeout=20) as r:
+        payload=json.loads(r.read().decode("utf-8"))
+    if not payload.get("ok"):
+        raise RuntimeError("Telegram API rejected message")
+    return payload["result"]
+
+def publish_telegram(limit=1):
+    """Publish planned Telegram distribution rows exactly once.
+
+    Rows are claimed before the network call. Failures are returned to planned so
+    a later cycle can retry; successful Telegram message_id is persisted.
+    """
+    if not _telegram_configured():
+        return {"status":"not_configured","published":0}
+    published=[]; errors=[]
+    for _ in range(max(1,min(int(limit),5))):
+        with core.db() as c:
+            row=c.execute("""select q.id queue_id,q.content_id,c.variants_json,c.title,o.name offer_name
+              from distribution_queue q join content c on c.id=q.content_id join offers o on o.id=c.offer_id
+              where q.channel='telegram' and q.status='planned'
+              order by q.id asc limit 1""").fetchone()
+            if not row: break
+            qid=int(row["queue_id"])
+            claimed=c.execute("update distribution_queue set status='publishing',last_error=null where id=%s and status='planned' returning id",(qid,)).fetchone()
+            if not claimed: continue
+        try:
+            variants=json.loads(row["variants_json"] or "{}")
+            text=_text(variants.get("commercial") or row["title"] or row["offer_name"])
+            relative=f"/r/{int(row['content_id'])}?source=telegram&channel=telegram"
+            text=text.replace(f"/r/{int(row['content_id'])}?source=content&channel=landing",_public_base_url()+relative)
+            if relative not in text and _public_base_url()+relative not in text:
+                text += "\n\n"+_public_base_url()+relative
+            result=_telegram_send(text[:4096])
+            mid=str(result.get("message_id",""))
+            chat=result.get("chat") or {}; username=chat.get("username")
+            external_url=(f"https://t.me/{username}/{mid}" if username and mid else None)
+            with core.db() as c:
+                c.execute("update distribution_queue set status='published',external_id=%s,external_url=%s,published_at=current_timestamp,last_error=null where id=%s",(mid,external_url,qid))
+                c.execute("update content set status='published' where id=%s",(int(row["content_id"]),))
+            published.append({"queue_id":qid,"message_id":mid,"url":external_url})
+            print("CPA_TELEGRAM_PUBLISHED",json.dumps(published[-1],ensure_ascii=False),flush=True)
+        except Exception as e:
+            err=f"{type(e).__name__}: {e}"[:1000]
+            with core.db() as c:
+                c.execute("update distribution_queue set status='planned',last_error=%s where id=%s",(err,qid))
+            errors.append({"queue_id":qid,"error":err})
+            print("CPA_TELEGRAM_ERROR",json.dumps(errors[-1],ensure_ascii=False),flush=True)
+            break
+    return {"status":"ok" if not errors else "error","published":len(published),"items":published,"errors":errors}
+
+@core.app.post("/api/telegram/publish")
+def telegram_publish_now(x_admin_token: str|None=Header(default=None)):
+    core.require_admin(x_admin_token)
+    return publish_telegram(int(os.getenv("TELEGRAM_PUBLISH_BATCH","1") or 1))
+
+@core.app.get("/api/telegram/status")
+def telegram_status():
+    with core.db() as c:
+        planned=c.execute("select count(*) n from distribution_queue where channel='telegram' and status='planned'").fetchone()["n"]
+        last=c.execute("select * from distribution_queue where channel='telegram' and status='published' order by id desc limit 1").fetchone()
+    return {"configured":_telegram_configured(),"planned":int(planned),"last_published":dict(last) if last else None}
+
 @core.app.get("/api/wordstat/status")
 def wordstat_status():
     try:
@@ -225,7 +318,8 @@ def _wordstat_daily_worker(today, wordstat_monitor):
             _WORDSTAT_DAILY_DATE["value"]=today
             print("CPA_WORDSTAT_DAILY_OK",flush=True)
         else:
-            print("CPA_WORDSTAT_DAILY_RETRY",json.dumps({"date":today,"exit_code":result},ensure_ascii=False),flush=True)
+            _WORDSTAT_DAILY_DATE["value"]=today
+            print("CPA_WORDSTAT_DAILY_DEFERRED",json.dumps({"date":today,"exit_code":result},ensure_ascii=False),flush=True)
     except Exception as e:
         print("CPA_WORDSTAT_DAILY_ERROR",type(e).__name__,str(e),flush=True)
     finally:
@@ -251,6 +345,10 @@ def _wordstat_daily_hook():
 _original_cycle=core._autopilot_cycle
 def _cycle_with_wordstat():
     result=_original_cycle()
+    try:
+        tg=publish_telegram(int(os.getenv("TELEGRAM_PUBLISH_BATCH","1") or 1))
+        print("CPA_TELEGRAM_CYCLE",json.dumps(tg,ensure_ascii=False),flush=True)
+    except Exception as e: print("CPA_TELEGRAM_CYCLE_ERROR",type(e).__name__,str(e),flush=True)
     try: _wordstat_daily_hook()
     except Exception as e: print("CPA_WORDSTAT_SCHEDULE_ERROR",type(e).__name__,str(e),flush=True)
     return result

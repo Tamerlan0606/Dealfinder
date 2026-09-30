@@ -101,13 +101,6 @@ def _traffic_ok(r):
     return not any(x in raw for x in prohibited)
 
 def distribution_top(limit=10):
-    """Rank offers by expected economics, then demand and creative readiness.
-
-    EPC is the strongest observed monetisation signal. When EPC is unavailable,
-    CR * payout is used as a conservative proxy. Demand is logarithmic so a
-    popular low-paying product cannot overwhelm a materially better offer.
-    """
-    import math
     with core.db() as c:
         rows=c.execute("""select o.*,count(e.id) clicks from offers o left join click_events e on e.offer_id=o.id
           where o.active=true group by o.id""").fetchall()
@@ -117,27 +110,19 @@ def distribution_top(limit=10):
         if not _traffic_ok(r): continue
         media=3 if r.get("video_url") else (2 if r.get("image_url") else 0)
         if not media: continue
-        epc=max(float(r.get("epc") or 0),0.0)
-        cr=max(float(r.get("cr") or 0),0.0)
-        demand=max(float(r.get("demand_count") or 0),0.0)
-        clicks=max(int(r.get("clicks") or 0),0)
-        payout=max(_effective_payout(r),0.0)
-        # Networks commonly expose CR as percent. This proxy is only used when
-        # EPC is absent, preventing payout alone from selecting an unconvertible offer.
-        proxy_epc=(min(cr,100.0)/100.0)*payout if payout else 0.0
-        expected_epc=epc if epc>0 else proxy_epc
-        demand_factor=1.0 + min(math.log1p(demand),12.0)/12.0
-        confidence=1.0 + min(math.log1p(clicks),7.0)*0.03
-        media_factor=1.05 if media==3 else 1.0
-        economic_value=expected_epc*demand_factor*confidence*media_factor
-        # Small tie-break quality term; it cannot dominate actual economics.
-        score=economic_value + min(cr,100.0)*0.0001 + min(math.log1p(payout),12.0)*0.0001
+        epc=float(r.get("epc") or 0); cr=float(r.get("cr") or 0)
+        demand=float(r.get("demand_count") or 0); clicks=int(r.get("clicks") or 0)
+        payout=_effective_payout(r)
+        score=(media*1.5
+               +min(__import__("math").log1p(max(demand,0)),12)*0.9
+               +min(__import__("math").log1p(max(epc,0)),8)*1.4
+               +min(max(cr,0),100)*0.08
+               +min(__import__("math").log1p(max(payout,0)),12)*0.9
+               +min(clicks,1000)*0.001)
         r["effective_payout"]=round(payout,2)
-        r["expected_epc"]=round(expected_epc,4)
-        r["economic_value"]=round(economic_value,6)
-        r["score"]=round(score,6)
+        r["score"]=round(score,4)
         out.append(r)
-    out.sort(key=lambda x:(x["economic_value"],x["expected_epc"],x["effective_payout"],float(x.get("demand_count") or 0),int(x["id"])),reverse=True)
+    out.sort(key=lambda x:(x["score"],x["effective_payout"],float(x.get("demand_count") or 0),int(x["id"])),reverse=True)
     return out[:max(1,min(int(limit),50))]
 
 core.cpa_top=distribution_top
@@ -240,8 +225,7 @@ def _wordstat_daily_worker(today, wordstat_monitor):
             _WORDSTAT_DAILY_DATE["value"]=today
             print("CPA_WORDSTAT_DAILY_OK",flush=True)
         else:
-            _WORDSTAT_DAILY_DATE["value"]=today
-            print("CPA_WORDSTAT_DAILY_DEFERRED",json.dumps({"date":today,"exit_code":result},ensure_ascii=False),flush=True)
+            print("CPA_WORDSTAT_DAILY_RETRY",json.dumps({"date":today,"exit_code":result},ensure_ascii=False),flush=True)
     except Exception as e:
         print("CPA_WORDSTAT_DAILY_ERROR",type(e).__name__,str(e),flush=True)
     finally:

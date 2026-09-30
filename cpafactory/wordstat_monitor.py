@@ -9,7 +9,8 @@ WORDSTAT_URL=os.getenv("YANDEX_WORDSTAT_URL","https://searchapi.api.cloud.yandex
 FOLDER_ID=os.getenv("YANDEX_WORDSTAT_FOLDER_ID") or os.getenv("YANDEX_FOLDER_ID") or os.getenv("YC_FOLDER_ID") or ""
 REGION_IDS=[x.strip() for x in os.getenv("YANDEX_WORDSTAT_REGIONS","225").split(",") if x.strip()]
 DEVICES=[x.strip() for x in os.getenv("YANDEX_WORDSTAT_DEVICES","DEVICE_ALL").split(",") if x.strip()]
-MAX_SEEDS=max(1,min(int(os.getenv("YANDEX_WORDSTAT_MAX_SEEDS","50") or 50),100))
+MAX_SEEDS=max(1,min(int(os.getenv("YANDEX_WORDSTAT_MAX_SEEDS","40") or 40),80))
+HOURLY_BUDGET=max(1,min(int(os.getenv("YANDEX_WORDSTAT_HOURLY_BUDGET","80") or 80),95))
 TOP_PER_SEED=max(1,min(int(os.getenv("YANDEX_WORDSTAT_TOP_PER_SEED","50") or 50),2000))
 
 def using_sqlite():
@@ -137,7 +138,7 @@ def run(force=False):
         if not force and _already_ok(run_date):
             print(json.dumps({"status":"skipped","reason":"already_ok","date":run_date},ensure_ascii=False),flush=True)
             return 0
-        seeds=get_seeds(); total=0; errors=[]; rate_limited=False
+        seeds=get_seeds()[:HOURLY_BUDGET]; total=0; errors=[]; rate_limited=False
         with db() as c:
             exec_sql(c,"insert into wordstat_runs(run_date,status,seed_count,result_count) values(%s,'running',%s,0) on conflict(run_date) do update set status=case when wordstat_runs.status='ok' then 'ok' else 'running' end,seed_count=%s,error=case when wordstat_runs.status='ok' then wordstat_runs.error else null end",(run_date,len(seeds),len(seeds)))
         for seed in seeds:
@@ -152,7 +153,9 @@ def run(force=False):
                         exec_sql(c,"insert into wordstat_queries(run_date,seed_phrase,phrase,count,regions,devices) values(%s,%s,%s,%s,%s,%s) on conflict(run_date,phrase,regions,devices) do update set count=excluded.count,seed_phrase=excluded.seed_phrase",(run_date,seed,phrase,count,",".join(REGION_IDS),",".join(DEVICES)))
                         total+=1
                 _update_offer_demand(seed,seed_max)
-                time.sleep(0.05)
+                # Stay comfortably below the provider's hourly quota. The daily
+                # job never spends more than HOURLY_BUDGET requests.
+                time.sleep(0.10)
             except Exception as e:
                 errors.append(f"{seed}: {type(e).__name__}: {e}")
                 if "HTTP 429" in str(e):

@@ -49,7 +49,7 @@ def _is_rate_limit_error(exc):
     return "http 429" in text or "quota limit exceed" in text or "wordstatrequestsperhour" in text
 
 def _clean_seed(v):
-    s=re.sub("[^0-9A-Za-zÐ-Ð¯Ð°-ÑÐÑ -]+"," ",str(v or ""))
+    s=re.sub("[^0-9A-Za-zА-Яа-яЁё -]+"," ",str(v or ""))
     s=" ".join(s.split()).strip()
     return s[:200] if len(s)>=2 else ""
 
@@ -64,7 +64,7 @@ def get_seeds():
         for row in rows:
             add(row["name"]); add(row["category"])
     for value in os.getenv("YANDEX_WORDSTAT_EXTRA_SEEDS","").split("|"): add(value)
-    for value in os.getenv("YANDEX_WORDSTAT_MARKET_SEEDS","ÑÑÑÐ¾Ð¹ÐºÐ°|ÑÐµÐ¼Ð¾Ð½Ñ|Ð¸Ð½ÑÑÑÑÐ¼ÐµÐ½Ñ|ÑÑÑÐ¾Ð¸ÑÐµÐ»ÑÐ½Ð°Ñ ÑÐµÑÐ½Ð¸ÐºÐ°|Ð´Ð¾Ð¼|Ð°Ð²ÑÐ¾|ÑÐ»ÐµÐºÑÑÐ¾Ð½Ð¸ÐºÐ°|ÑÐ¼Ð°ÑÑÑÐ¾Ð½Ñ|ÐºÐ¾Ð¼Ð¿ÑÑÑÐµÑÑ|ÑÐ¾Ð²Ð°ÑÑ Ð´Ð»Ñ Ð±Ð¸Ð·Ð½ÐµÑÐ°|Ð¾Ð±Ð¾ÑÑÐ´Ð¾Ð²Ð°Ð½Ð¸Ðµ").split("|"): add(value)
+    for value in os.getenv("YANDEX_WORDSTAT_MARKET_SEEDS","стройка|ремонт|инструмент|строительная техника|дом|авто|электроника|смартфоны|компьютеры|товары для бизнеса|оборудование").split("|"): add(value)
     return seeds[:MAX_SEEDS]
 
 def _http_error(e):

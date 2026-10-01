@@ -1,4 +1,7 @@
 import io
+import base64
+import hashlib
+import hmac
 import json
 import os
 import re
@@ -6,6 +9,7 @@ import sqlite3
 import time
 import unicodedata
 import urllib.request
+import urllib.parse
 from collections import Counter
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -74,6 +78,48 @@ PRODUCTS: dict[str, dict[str, Any]] = {
         "description": "Extract text from a text-based PDF.",
         "tags": ["pdf", "extract", "document"],
     },
+    "hash": {
+        "path": "/v1/hash",
+        "price": 0.001,
+        "estimated_cost": 0.00001,
+        "description": "Generate SHA-256, SHA-512, SHA-1 or MD5 hex digests for agent pipelines, checksums and deduplication.",
+        "tags": ["hash", "sha256", "sha512", "checksum", "encoding"],
+    },
+    "hmac": {
+        "path": "/v1/hmac",
+        "price": 0.001,
+        "estimated_cost": 0.00001,
+        "description": "Generate HMAC-SHA256 or HMAC-SHA512 signatures from a caller-supplied key and message.",
+        "tags": ["hmac", "sha256", "signature", "encoding"],
+    },
+    "base64_encode": {
+        "path": "/v1/base64/encode",
+        "price": 0.001,
+        "estimated_cost": 0.00001,
+        "description": "Base64-encode UTF-8 text for binary-safe transport in agent and API pipelines.",
+        "tags": ["base64", "encode", "encoding"],
+    },
+    "base64_decode": {
+        "path": "/v1/base64/decode",
+        "price": 0.001,
+        "estimated_cost": 0.00001,
+        "description": "Decode Base64 to UTF-8 text with strict validation.",
+        "tags": ["base64", "decode", "encoding"],
+    },
+    "url_encode": {
+        "path": "/v1/url/encode",
+        "price": 0.001,
+        "estimated_cost": 0.00001,
+        "description": "RFC 3986 percent-encode text for safe URL path and query transport.",
+        "tags": ["url", "percent-encoding", "encode"],
+    },
+    "url_decode": {
+        "path": "/v1/url/decode",
+        "price": 0.001,
+        "estimated_cost": 0.00001,
+        "description": "Decode RFC 3986 percent-encoded text back to Unicode.",
+        "tags": ["url", "percent-encoding", "decode"],
+    },
 }
 
 STOPWORDS = {
@@ -97,6 +143,13 @@ class HtmlInput(BaseModel):
 
 class JsonRepairInput(BaseModel):
     text: str = Field(min_length=1, max_length=MAX_TEXT_CHARS)
+
+class HashInput(TextInput):
+    algorithm: str = "sha256"
+
+class HmacInput(TextInput):
+    key: str = Field(min_length=1, max_length=10000)
+    algorithm: str = "sha256"
 
 
 def utcnow() -> str:
@@ -508,6 +561,65 @@ def api_html_to_text(payload: HtmlInput) -> dict[str, Any]:
             break
     record_event("html_to_text", started)
     return {"text": text[:MAX_TEXT_CHARS], "links": links}
+
+
+@app.post("/v1/hash")
+def api_hash(payload: HashInput) -> dict[str, Any]:
+    started = time.perf_counter()
+    algo = payload.algorithm.lower().replace("-", "")
+    allowed = {"sha256": hashlib.sha256, "sha512": hashlib.sha512, "sha1": hashlib.sha1, "md5": hashlib.md5}
+    if algo not in allowed:
+        raise HTTPException(status_code=422, detail="algorithm must be sha256, sha512, sha1 or md5")
+    digest = allowed[algo](payload.text.encode("utf-8")).hexdigest()
+    record_event("hash", started)
+    return {"algorithm": algo, "digest": digest}
+
+
+@app.post("/v1/hmac")
+def api_hmac(payload: HmacInput) -> dict[str, Any]:
+    started = time.perf_counter()
+    algo = payload.algorithm.lower().replace("-", "")
+    allowed = {"sha256": hashlib.sha256, "sha512": hashlib.sha512}
+    if algo not in allowed:
+        raise HTTPException(status_code=422, detail="algorithm must be sha256 or sha512")
+    digest = hmac.new(payload.key.encode("utf-8"), payload.text.encode("utf-8"), allowed[algo]).hexdigest()
+    record_event("hmac", started)
+    return {"algorithm": algo, "digest": digest}
+
+
+@app.post("/v1/base64/encode")
+def api_base64_encode(payload: TextInput) -> dict[str, Any]:
+    started = time.perf_counter()
+    value = base64.b64encode(payload.text.encode("utf-8")).decode("ascii")
+    record_event("base64_encode", started)
+    return {"value": value}
+
+
+@app.post("/v1/base64/decode")
+def api_base64_decode(payload: TextInput) -> dict[str, Any]:
+    started = time.perf_counter()
+    try:
+        value = base64.b64decode(payload.text.encode("ascii"), validate=True).decode("utf-8")
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail="Invalid Base64 UTF-8 payload") from exc
+    record_event("base64_decode", started)
+    return {"value": value}
+
+
+@app.post("/v1/url/encode")
+def api_url_encode(payload: TextInput) -> dict[str, Any]:
+    started = time.perf_counter()
+    value = urllib.parse.quote(payload.text, safe="")
+    record_event("url_encode", started)
+    return {"value": value}
+
+
+@app.post("/v1/url/decode")
+def api_url_decode(payload: TextInput) -> dict[str, Any]:
+    started = time.perf_counter()
+    value = urllib.parse.unquote(payload.text)
+    record_event("url_decode", started)
+    return {"value": value}
 
 
 @app.post("/v1/pdf/extract-text")

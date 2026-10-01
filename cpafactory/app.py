@@ -331,7 +331,7 @@ def _admitad_access_token(force=False):
     basic=_admitad_basic_header()
     if not cid or not basic:
         return ""
-    scopes=os.getenv("ADMITAD_SCOPES","advcampaigns advcampaigns_for_website websites statistics deeplink_generator public_data").strip()
+    scopes=os.getenv("ADMITAD_SCOPES","advcampaigns advcampaigns_for_website websites statistics deeplink_generator").strip()
     body=urllib.parse.urlencode({"grant_type":"client_credentials","client_id":cid,"scope":scopes}).encode()
     req=urllib.request.Request("https://api.admitad.com/token/",data=body,method="POST",headers={
         "Authorization":f"Basic {basic}",
@@ -352,17 +352,25 @@ def _admitad_get(url: str, token: str | None = None):
     token=(token or _admitad_access_token()).strip()
     if not token:
         raise RuntimeError("Admitad credentials are not configured")
-    req=urllib.request.Request(url, headers={"Authorization":f"Bearer {token}","Accept":"application/json","User-Agent":"CPAFactory/2.1"})
-    try:
-        with urllib.request.urlopen(req, timeout=25) as r:
-            return json.loads(r.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        if e.code == 401 and token == _ADMITAD_TOKEN_CACHE.get("token"):
-            token=_admitad_access_token(force=True)
-            req=urllib.request.Request(url, headers={"Authorization":f"Bearer {token}","Accept":"application/json","User-Agent":"CPAFactory/2.1"})
+    last=None
+    for attempt in range(3):
+        req=urllib.request.Request(url, headers={"Authorization":f"Bearer {token}","Accept":"application/json","User-Agent":"CPAFactory/2.2"})
+        try:
             with urllib.request.urlopen(req, timeout=25) as r:
                 return json.loads(r.read().decode("utf-8"))
-        raise
+        except urllib.error.HTTPError as e:
+            last=e
+            if e.code == 401 and token == _ADMITAD_TOKEN_CACHE.get("token"):
+                token=_admitad_access_token(force=True)
+                continue
+            raise
+        except urllib.error.URLError as e:
+            last=e
+            if attempt < 2:
+                time.sleep(2 ** attempt)
+                continue
+            raise
+    raise last or RuntimeError("Admitad request failed")
 
 def _admitad_website(token: str | None = None):
     configured=os.getenv("ADMITAD_WEBSITE_ID","").strip()
@@ -452,7 +460,7 @@ def cpa_import(x_admin_token: str | None = Header(default=None)):
         website=str(website_obj.get("id") or "").strip()
         if not website:
             raise RuntimeError("Не удалось определить Admitad website id")
-        url=f"https://api.admitad.com/advcampaigns/website/{urllib.parse.quote(website,safe='')}/?limit=100&connection_status=active&language=ru"
+        url=f"https://api.admitad.com/advcampaigns/website/{urllib.parse.quote(website,safe='')}/?limit=100&connection_status=active&language=en"
         data=_admitad_get(url,token)
     except Exception as e:
         raise HTTPException(502,f"Admitad API: {e}")
@@ -500,6 +508,55 @@ def admitad_status():
     except Exception as e:
         result["error"]=f"{type(e).__name__}: {e}"
         return result
+
+def _admitad_sync_revenue():
+    """Reconcile Admitad actions into the local revenue ledger idempotently."""
+    if not _admitad_configured():
+        return {"status":"not_configured"}
+    token=_admitad_access_token()
+    import datetime as _dt
+    start=(_dt.datetime.utcnow()-_dt.timedelta(days=35)).strftime("%d.%m.%Y")
+    end=_dt.datetime.utcnow().strftime("%d.%m.%Y")
+    data=_admitad_get(f"https://api.admitad.com/statistics/actions/?limit=500&date_start={start}&date_end={end}",token)
+    items=data.get("results",[]) if isinstance(data,dict) else (data or [])
+    added=updated=skipped=0
+    with db() as c:
+        if using_sqlite():
+            for stmt in ["alter table revenue_events add column source text","alter table revenue_events add column external_id text"]:
+                try: c.execute(stmt)
+                except Exception: pass
+        else:
+            c.execute("alter table revenue_events add column if not exists source text")
+            c.execute("alter table revenue_events add column if not exists external_id text")
+        c.execute("create unique index if not exists uq_revenue_source_external on revenue_events(source,external_id) where external_id is not null")
+        for a in items:
+            ext=str(a.get("id") or a.get("action_id") or "").strip()
+            if not ext: skipped+=1; continue
+            campaign=str(a.get("advcampaign_id") or a.get("campaign_id") or a.get("campaign") or "").strip()
+            offer=c.execute("select id from offers where source='admitad' and external_id=%s",(campaign,)).fetchone() if campaign else None
+            if not offer: skipped+=1; continue
+            subid=str(a.get("subid") or "").strip()
+            content_id=None
+            m=re.match(r"^cf_\\d+_(\\d+)_",subid)
+            if m and int(m.group(1) or 0)>0: content_id=int(m.group(1))
+            status_map={"approved":"approved","pending":"open","open":"open","declined":"declined"}
+            status=status_map.get(str(a.get("status") or "").lower(),str(a.get("status") or "open").lower())
+            amount=0.0
+            for key in ("payment","payment_sum","payment_sum_approved","cart","commission"):
+                try:
+                    if a.get(key) not in (None,""): amount=float(a.get(key)); break
+                except Exception: pass
+            event_type=str(a.get("action_type") or a.get("type") or "action")
+            existing=c.execute("select id from revenue_events where source='admitad' and external_id=%s",(ext,)).fetchone()
+            if existing:
+                c.execute("update revenue_events set offer_id=%s,content_id=%s,subid=%s,event_type=%s,amount=%s,status=%s where id=%s",
+                          (int(offer["id"]),content_id,subid,event_type,amount,status,existing["id"]))
+                updated+=1
+            else:
+                c.execute("insert into revenue_events(offer_id,content_id,subid,event_type,amount,status,source,external_id) values(%s,%s,%s,%s,%s,%s,'admitad',%s)",
+                          (int(offer["id"]),content_id,subid,event_type,amount,status,ext))
+                added+=1
+    return {"status":"ok","received":len(items),"added":added,"updated":updated,"skipped":skipped}
 
 @app.get("/api/cpa/import/gdeslon")
 def cpa_import_gdeslon(x_admin_token: str | None = Header(default=None)):
@@ -661,6 +718,11 @@ def _pipeline_run():
         if _admitad_configured():
             try:
                 imported.append(cpa_import(ADMIN_TOKEN))
+                try:
+                    rev=_admitad_sync_revenue()
+                    print("CPA_ADMITAD_REVENUE_SYNC", json.dumps(rev,ensure_ascii=False,default=str), flush=True)
+                except Exception as rev_error:
+                    print("CPA_ADMITAD_REVENUE_ERROR", type(rev_error).__name__, str(rev_error), flush=True)
             except Exception as e:
                 print("CPA_ADMITAD_REFRESH_ERROR", type(e).__name__, str(e), flush=True)
                 imported.append({"source":"admitad","status":"refresh_error","error":f"{type(e).__name__}: {e}"})
@@ -1034,82 +1096,3 @@ try:
     import enhancements
 except Exception as e:
     print("CPA_ENHANCEMENTS_IMPORT_ERROR", type(e).__name__, str(e), flush=True)
-
-
-# --- Admitad publisher integration ---
-def _admitad_token():
-    client_id = os.getenv("ADMITAD_CLIENT_ID", "").strip()
-    client_secret = os.getenv("ADMITAD_CLIENT_SECRET", "").strip()
-    if not client_id or not client_secret:
-        raise HTTPException(503, "Admitad API credentials are not configured")
-    scope = "advcampaigns advcampaigns_for_website websites statistics"
-    body = urllib.parse.urlencode({"grant_type":"client_credentials","client_id":client_id,"scope":scope}).encode()
-    import base64
-    basic = base64.b64encode((client_id + ":" + client_secret).encode()).decode()
-    req = urllib.request.Request("https://api.admitad.com/token/", data=body, method="POST",
-        headers={"Authorization":"Basic " + basic,"Content-Type":"application/x-www-form-urlencoded;charset=UTF-8"})
-    with urllib.request.urlopen(req, timeout=25) as resp:
-        return json.loads(resp.read().decode())["access_token"]
-
-def _admitad_get(path, token):
-    req = urllib.request.Request("https://api.admitad.com" + path,
-        headers={"Authorization":"Bearer " + token,"Accept":"application/json"})
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read().decode())
-
-def _num(v):
-    try: return float(v or 0)
-    except Exception: return 0.0
-
-@app.get("/admin/admitad/status")
-def admitad_status(x_admin_token: str | None = Header(default=None)):
-    require_admin(x_admin_token)
-    return {"configured": bool(os.getenv("ADMITAD_CLIENT_ID") and os.getenv("ADMITAD_CLIENT_SECRET")),
-            "mode":"publisher","sync":"active-programs-only"}
-
-@app.post("/admin/admitad/sync")
-def admitad_sync(x_admin_token: str | None = Header(default=None)):
-    require_admin(x_admin_token)
-    token = _admitad_token()
-    spaces = _admitad_get("/websites/v2/?status=active", token)
-    if isinstance(spaces, dict): spaces = spaces.get("results", spaces.get("data", []))
-    imported = updated = 0
-    active_spaces = []
-    for w in spaces or []:
-        wid = w.get("id")
-        if not wid: continue
-        active_spaces.append({"id":wid,"name":w.get("name"),"url":w.get("site_url")})
-        data = _admitad_get(f"/advcampaigns/website/{wid}/?connection_status=active&limit=200&language=en", token)
-        for p in (data.get("results", []) if isinstance(data, dict) else []):
-            pid = str(p.get("id") or "")
-            if not pid: continue
-            actions = p.get("actions") or []
-            payouts = [str(a.get("payment_size","")).strip() for a in actions if a.get("payment_size")]
-            numeric = []
-            for pay in payouts:
-                if "%" not in pay:
-                    m = re.search(r"[-+]?\d+(?:[.,]\d+)?", pay)
-                    if m: numeric.append(_num(m.group(0).replace(",",".")))
-            commission = max(numeric) if numeric else 0
-            currency = p.get("currency") or ""
-            cats = ", ".join(x.get("name","") for x in (p.get("categories") or []) if x.get("name"))
-            regions = ",".join(x.get("region","") for x in (p.get("regions") or []) if x.get("region"))
-            traffic = json.dumps({"regions":regions,"traffics":p.get("traffics") or [],"actions":actions,"currency":currency}, ensure_ascii=False)
-            gotolink = p.get("gotolink") or ""
-            if not gotolink: continue
-            with db() as conn:
-                existing = conn.execute("select id from offers where source=%s and external_id=%s", ("admitad",pid)).fetchone()
-                vals=(p.get("name") or f"Admitad {pid}",p.get("name") or "",commission,gotolink,traffic,
-                      _num(p.get("rating")),_num(p.get("epc")),_num(p.get("cr")),"; ".join(payouts),
-                      p.get("site_url") or "",p.get("image") or "",p.get("description") or "",cats)
-                if existing:
-                    conn.execute("""update offers set name=%s,merchant=%s,commission=%s,tracking_url=%s,traffic_rules=%s,
-                      rating=%s,epc=%s,cr=%s,cpa_rate=%s,site_url=%s,image_url=%s,description=%s,category=%s,active=true
-                      where source='admitad' and external_id=%s""", vals+(pid,))
-                    updated += 1
-                else:
-                    conn.execute("""insert into offers(name,merchant,commission,tracking_url,traffic_rules,rating,epc,cr,cpa_rate,
-                      site_url,image_url,description,category,active,source,external_id)
-                      values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,true,'admitad',%s)""", vals+(pid,))
-                    imported += 1
-    return {"ok":True,"spaces":active_spaces,"imported":imported,"updated":updated}

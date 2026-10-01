@@ -631,9 +631,9 @@ a{{color:#111}} </style></head><body>
 <div class='hero'><div class='pill'>{'LIVE x402' if payment_enabled() else 'OPEN TEST MODE'}</div><h1>WORKMINE</h1>
 <p>Pay-per-call digital microservice farm. Machines call. Machines pay. The router measures margin per endpoint.</p>
 <div class='kpis'><div class='kpi'><div>Calls</div><div class='n'>{stats_data['calls']}</div></div>
-<div class='kpi'><div>Revenue</div><div class='n'>${stats_data['revenue_usd']:.4f}</div></div>
-<div class='kpi'><div>Est. cost</div><div class='n'>${stats_data['estimated_cost_usd']:.4f}</div></div>
-<div class='kpi'><div>Gross profit</div><div class='n'>${stats_data['gross_profit_usd']:.4f}</div></div></div>
+<div class='kpi'><div>Settlements</div><div class='n'>{stats_data['actual_settlements']}</div></div>
+<div class='kpi'><div>Settled USDC</div><div class='n'>{stats_data['actual_settled_usdc']:.4f}</div></div>
+<div class='kpi'><div>Modeled billable</div><div class='n'>${stats_data['modeled_billable_usd']:.4f}</div></div></div>
 <p><a href='/docs'>Interactive API docs</a> · <a href='/catalog'>Machine-readable catalog</a> · <a href='/stats'>Stats JSON</a></p></div>
 <table><thead><tr><th>Product</th><th>Endpoint</th><th>Price/call</th><th>Purpose</th></tr></thead><tbody>{rows}</tbody></table>
 </body></html>"""

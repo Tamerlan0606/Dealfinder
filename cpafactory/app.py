@@ -7,6 +7,7 @@ from psycopg.rows import dict_row
 
 app = FastAPI(title="CPA Factory")
 ADMIN_TOKEN = os.environ.get("CPA_ADMIN_TOKEN", "")
+print("ADMITAD_CONFIGURED=" + str(bool(os.getenv("ADMITAD_CLIENT_ID") and os.getenv("ADMITAD_CLIENT_SECRET"))), flush=True)
 
 def require_admin(x_admin_token: str | None):
     if not ADMIN_TOKEN:

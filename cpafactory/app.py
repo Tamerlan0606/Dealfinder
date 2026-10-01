@@ -717,8 +717,7 @@ def _pipeline_run():
                 imported.append({"source":"gdeslon","status":"refresh_error","error":f"{type(e).__name__}: {e}"})
         if _admitad_configured():
             try:
-                imported.append(cpa_import(ADMIN_TOKEN))
-                try:
+                admitad_result=cpa_import(ADMIN_TOKEN)\n                imported.append(admitad_result)\n                print("CPA_ADMITAD_OFFER_SYNC", json.dumps(admitad_result,ensure_ascii=False,default=str), flush=True)\n                try:
                     rev=_admitad_sync_revenue()
                     print("CPA_ADMITAD_REVENUE_SYNC", json.dumps(rev,ensure_ascii=False,default=str), flush=True)
                 except Exception as rev_error:

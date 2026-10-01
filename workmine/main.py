@@ -19,7 +19,7 @@ from typing import Any
 
 from bs4 import BeautifulSoup
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 from json_repair import repair_json
 from pydantic import BaseModel, Field
 from pypdf import PdfReader
@@ -579,6 +579,12 @@ Paid endpoints:
 - POST /v1/html/to-text — $0.003 — HTML text/link extraction
 - POST /v1/pdf/extract-text — $0.010 — text-layer PDF extraction
 """
+
+
+@app.head("/")
+@app.head("/health")
+def head_health() -> Response:
+    return Response(status_code=200)
 
 
 @app.get("/health")

@@ -7,6 +7,7 @@ from PIL import Image, ImageDraw, ImageFont
 app = FastAPI(title="MarketStart AI", docs_url=None, redoc_url=None)
 SITE_URL = os.getenv("SITE_URL", "https://marketstart-production.onrender.com").rstrip("/")
 CPA_OUT = os.getenv("CPA_OUT", "https://cpafactory-web.onrender.com/go/1")
+GLOBAL_CPA_OUT = os.getenv("GLOBAL_CPA_OUT", "https://cpafactory-web.onrender.com/go/admitad/6115?source=marketstart_global&channel=tiktok")
 
 TOPICS = [
 ("nisha","Как выбрать нишу для старта на маркетплейсе"),
@@ -167,6 +168,10 @@ def global_home():
 <h2>Operating rule</h2><p>Test small, measure contribution margin, and scale only what the data validates.</p>
 <p><small>This page is educational. Marketplace fees, tax rules and program availability vary by country and platform.</small></p>"""
     return page("Marketplace Launch Framework", body, "/global")
+
+@app.get("/global/go")
+def global_go():
+    return RedirectResponse(GLOBAL_CPA_OUT, status_code=302)
 
 @app.get("/api/social/tiktok")
 def tiktok_content():

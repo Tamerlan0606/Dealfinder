@@ -274,12 +274,14 @@ def add_tracking(url: str, subid: str) -> str:
     return urlunparse(p._replace(query=urlencode(q)))
 
 @app.get("/go/{offer_id}")
-def go(offer_id: int, content_id: int = 0):
+def go(offer_id: int, content_id: int = 0, source: str = "direct", channel: str = "unknown"):
+    safe_source = re.sub(r"[^a-zA-Z0-9_-]", "", str(source))[:24] or "direct"
+    safe_channel = re.sub(r"[^a-zA-Z0-9_-]", "", str(channel))[:24] or "unknown"
     with db() as c:
         offer = c.execute("select * from offers where id=%s and active=true", (offer_id,)).fetchone()
         if not offer or not offer["tracking_url"]:
             raise HTTPException(404, "Оффер не найден")
-        subid = f"cf_{offer_id}_{content_id or 0}"
+        subid = f"cf_{offer_id}_{content_id or 0}_{safe_source}_{safe_channel}"
         c.execute("insert into click_events(offer_id,content_id,subid) values(%s,%s,%s)",
                   (offer_id, content_id or None, subid))
         c.execute("update content set clicks=clicks+1 where id=%s", (content_id,)) if content_id else None

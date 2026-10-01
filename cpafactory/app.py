@@ -260,7 +260,7 @@ def startup():
 
 @app.get("/health")
 def health():
-    return {"ok": True, "service": "cpa-factory"}
+    return {"ok": True, "service": "cpa-factory", "admitad_configured": bool(os.getenv("ADMITAD_CLIENT_ID") and os.getenv("ADMITAD_CLIENT_SECRET"))}
 
 @app.get("/", response_class=HTMLResponse)
 def home():

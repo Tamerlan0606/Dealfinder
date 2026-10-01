@@ -611,6 +611,35 @@ def discovery_manifest() -> dict[str, Any]:
     return {"service": APP_NAME, "x402Version": 2, "payTo": PAY_TO, "items": items}
 
 
+@app.get("/robots.txt", response_class=PlainTextResponse)
+def robots_txt() -> str:
+    base = PUBLIC_BASE_URL or "https://workmine-api.onrender.com"
+    return f"""User-agent: *
+Allow: /
+Sitemap: {base}/sitemap.xml
+"""
+
+
+@app.get("/sitemap.xml", response_class=Response)
+def sitemap_xml() -> Response:
+    base = PUBLIC_BASE_URL or "https://workmine-api.onrender.com"
+    paths = ["/", "/docs", "/catalog", "/llms.txt", "/.well-known/x402", "/x402/discovery.json", "/openapi.json"]
+    urls = "".join(f"<url><loc>{base}{path}</loc></url>" for path in paths)
+    return Response(content=f'<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{urls}</urlset>', media_type="application/xml")
+
+
+@app.get("/.well-known/mcp.json")
+def mcp_well_known() -> dict[str, Any]:
+    return {
+        "name": "WORKMINE",
+        "description": "MCP discovery gateway for WORKMINE x402 pay-per-call APIs.",
+        "transport": "streamable-http",
+        "url": "https://workmine-mcp.onrender.com/mcp",
+        "registry": "io.github.Tamerlan0606/workmine",
+        "api": PUBLIC_BASE_URL or "https://workmine-api.onrender.com",
+    }
+
+
 @app.get("/llms.txt", response_class=PlainTextResponse)
 def llms_txt() -> str:
     base = PUBLIC_BASE_URL or ""

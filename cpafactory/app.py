@@ -152,22 +152,29 @@ def init():
             c.execute("alter table content add column if not exists thumbnail_prompt text")
         c.execute("create unique index if not exists uq_offers_source_external on offers(source,external_id) where external_id is not null")
         # CPA distribution engine schema (media, landing, channel plans, conversion tracking)
-        for stmt in [
-            "alter table offers add column description text",
-            "alter table offers add column category text",
-            "alter table offers add column old_price real default 0",
-            "alter table offers add column discount text",
-            "alter table offers add column media_checked_at text",
-            "alter table offers add column media_type text",
-            "alter table offers add column traffic_allowed text",
-            "alter table content add column media_url text",
-            "alter table content add column media_type text",
-            "alter table content add column landing_slug text",
-            "alter table content add column variants_json text",
-            "alter table content add column source_text text",
-        ]:
-            try: c.execute(stmt)
-            except Exception: pass
+        distribution_alters = [
+            ("offers","description","text"),
+            ("offers","category","text"),
+            ("offers","old_price","real default 0"),
+            ("offers","discount","text"),
+            ("offers","media_checked_at","text"),
+            ("offers","media_type","text"),
+            ("offers","traffic_allowed","text"),
+            ("content","media_url","text"),
+            ("content","media_type","text"),
+            ("content","landing_slug","text"),
+            ("content","variants_json","text"),
+            ("content","source_text","text"),
+        ]
+        for table, column, ddl in distribution_alters:
+            stmt = f"alter table {table} add column {'if not exists ' if not using_sqlite() else ''}{column} {ddl}"
+            if using_sqlite():
+                try:
+                    c.execute(stmt)
+                except Exception:
+                    pass
+            else:
+                c.execute(stmt)
         if using_sqlite():
             c.execute("""create table if not exists distribution_queue(
               id integer primary key autoincrement, content_id integer references content(id),
@@ -184,6 +191,7 @@ def init():
             )""")
         c.execute("create index if not exists idx_distribution_status on distribution_queue(status)")
         c.execute("create index if not exists idx_distribution_content on distribution_queue(content_id)")
+        c.execute("create unique index if not exists uq_distribution_content_channel on distribution_queue(content_id,channel)")
 
 
 _AUTOPILOT_LOCK = threading.Lock()

@@ -1,0 +1,419 @@
+import io
+import json
+import os
+import re
+import sqlite3
+import time
+import unicodedata
+from collections import Counter
+from contextlib import contextmanager
+from datetime import datetime, timezone
+from html import escape
+from pathlib import Path
+from typing import Any
+
+from bs4 import BeautifulSoup
+from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.responses import HTMLResponse
+from json_repair import repair_json
+from pydantic import BaseModel, Field
+from pypdf import PdfReader
+
+APP_NAME = "WORKMINE"
+VERSION = "0.1.0"
+PAYMENT_MODE = os.getenv("WORKMINE_PAYMENT_MODE", "open").strip().lower()
+PAY_TO = os.getenv("PAY_TO", "").strip()
+X402_NETWORK = os.getenv("X402_NETWORK", "eip155:8453").strip()
+X402_FACILITATOR_URL = os.getenv("X402_FACILITATOR_URL", "https://x402.org/facilitator").strip()
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
+DB_PATH = os.getenv("WORKMINE_DB_PATH", "/tmp/workmine.db")
+MAX_TEXT_CHARS = int(os.getenv("MAX_TEXT_CHARS", "200000"))
+MAX_PDF_BYTES = int(os.getenv("MAX_PDF_BYTES", str(8 * 1024 * 1024)))
+
+PRODUCTS: dict[str, dict[str, Any]] = {
+    "normalize": {
+        "path": "/v1/text/normalize",
+        "price": 0.001,
+        "estimated_cost": 0.00003,
+        "description": "Normalize whitespace, Unicode, case and accents in text.",
+        "tags": ["text", "normalize", "cleanup"],
+    },
+    "keywords": {
+        "path": "/v1/text/keywords",
+        "price": 0.002,
+        "estimated_cost": 0.00005,
+        "description": "Extract high-signal keywords from text without an LLM.",
+        "tags": ["text", "keywords", "nlp"],
+    },
+    "repair_json": {
+        "path": "/v1/json/repair",
+        "price": 0.003,
+        "estimated_cost": 0.00005,
+        "description": "Repair malformed JSON and return valid structured data.",
+        "tags": ["json", "repair", "developer"],
+    },
+    "redact": {
+        "path": "/v1/text/redact",
+        "price": 0.002,
+        "estimated_cost": 0.00004,
+        "description": "Redact common emails, IPs, cards and phone-like identifiers.",
+        "tags": ["text", "privacy", "redact"],
+    },
+    "html_to_text": {
+        "path": "/v1/html/to-text",
+        "price": 0.003,
+        "estimated_cost": 0.00006,
+        "description": "Convert HTML to clean readable text and extract links.",
+        "tags": ["html", "extract", "text"],
+    },
+    "pdf_extract": {
+        "path": "/v1/pdf/extract-text",
+        "price": 0.01,
+        "estimated_cost": 0.0007,
+        "description": "Extract text from a text-based PDF.",
+        "tags": ["pdf", "extract", "document"],
+    },
+}
+
+STOPWORDS = {
+    "the", "and", "for", "with", "that", "this", "from", "have", "are", "was", "were", "will", "your", "you",
+    "but", "not", "all", "can", "into", "about", "как", "что", "это", "для", "или", "его", "она", "они", "так",
+    "при", "без", "над", "под", "если", "уже", "еще", "ещё", "где", "чтобы", "который", "которые", "когда", "быть",
+}
+
+class TextInput(BaseModel):
+    text: str = Field(min_length=1, max_length=MAX_TEXT_CHARS)
+
+class NormalizeInput(TextInput):
+    lowercase: bool = False
+    strip_accents: bool = False
+
+class KeywordsInput(TextInput):
+    limit: int = Field(default=12, ge=1, le=50)
+
+class HtmlInput(BaseModel):
+    html: str = Field(min_length=1, max_length=MAX_TEXT_CHARS)
+
+class JsonRepairInput(BaseModel):
+    text: str = Field(min_length=1, max_length=MAX_TEXT_CHARS)
+
+
+def utcnow() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def payment_enabled() -> bool:
+    return PAYMENT_MODE == "x402" and bool(PAY_TO)
+
+
+def init_db() -> None:
+    Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(DB_PATH) as con:
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts TEXT NOT NULL,
+                endpoint TEXT NOT NULL,
+                duration_ms REAL NOT NULL,
+                paid INTEGER NOT NULL,
+                price_usd REAL NOT NULL,
+                estimated_cost_usd REAL NOT NULL,
+                gross_profit_usd REAL NOT NULL
+            )
+            """
+        )
+        con.commit()
+
+
+def record_event(product: str, started: float) -> None:
+    meta = PRODUCTS[product]
+    paid = 1 if payment_enabled() else 0
+    price = float(meta["price"]) if paid else 0.0
+    cost = float(meta["estimated_cost"])
+    profit = price - cost
+    try:
+        with sqlite3.connect(DB_PATH) as con:
+            con.execute(
+                "INSERT INTO events(ts, endpoint, duration_ms, paid, price_usd, estimated_cost_usd, gross_profit_usd) VALUES(?,?,?,?,?,?,?)",
+                (utcnow(), product, (time.perf_counter() - started) * 1000.0, paid, price, cost, profit),
+            )
+            con.commit()
+    except Exception:
+        pass
+
+
+def summary_stats() -> dict[str, Any]:
+    init_db()
+    with sqlite3.connect(DB_PATH) as con:
+        total = con.execute(
+            "SELECT COUNT(*), COALESCE(SUM(price_usd),0), COALESCE(SUM(estimated_cost_usd),0), COALESCE(SUM(gross_profit_usd),0) FROM events"
+        ).fetchone()
+        rows = con.execute(
+            """
+            SELECT endpoint, COUNT(*), COALESCE(SUM(price_usd),0), COALESCE(SUM(estimated_cost_usd),0),
+                   COALESCE(SUM(gross_profit_usd),0), COALESCE(AVG(duration_ms),0)
+            FROM events GROUP BY endpoint ORDER BY SUM(gross_profit_usd) DESC, COUNT(*) DESC
+            """
+        ).fetchall()
+    return {
+        "calls": total[0],
+        "revenue_usd": round(total[1], 6),
+        "estimated_cost_usd": round(total[2], 6),
+        "gross_profit_usd": round(total[3], 6),
+        "payment_mode": "x402" if payment_enabled() else "open",
+        "products": [
+            {
+                "name": r[0], "calls": r[1], "revenue_usd": round(r[2], 6),
+                "estimated_cost_usd": round(r[3], 6), "gross_profit_usd": round(r[4], 6),
+                "avg_duration_ms": round(r[5], 2),
+            }
+            for r in rows
+        ],
+    }
+
+
+def normalize_text(text: str, lowercase: bool, strip_accents: bool) -> str:
+    value = unicodedata.normalize("NFKC", text)
+    value = re.sub(r"[\t\r\f\v]+", " ", value)
+    value = re.sub(r"[ ]{2,}", " ", value)
+    value = re.sub(r"\n{3,}", "\n\n", value).strip()
+    if strip_accents:
+        value = "".join(c for c in unicodedata.normalize("NFKD", value) if not unicodedata.combining(c))
+    if lowercase:
+        value = value.lower()
+    return value
+
+
+def extract_keywords(text: str, limit: int) -> list[dict[str, Any]]:
+    words = re.findall(r"[A-Za-zА-Яа-яЁё0-9][A-Za-zА-Яа-яЁё0-9_-]{2,}", text.lower())
+    words = [w for w in words if w not in STOPWORDS and not w.isdigit()]
+    counts = Counter(words)
+    return [{"keyword": w, "count": c} for w, c in counts.most_common(limit)]
+
+
+def redact_text(text: str) -> tuple[str, dict[str, int]]:
+    patterns = {
+        "email": r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b",
+        "ipv4": r"\b(?:\d{1,3}\.){3}\d{1,3}\b",
+        "card_like": r"\b(?:\d[ -]*?){13,19}\b",
+        "phone_like": r"(?<!\w)(?:\+?\d[\d ()-]{7,}\d)(?!\w)",
+    }
+    out = text
+    counts: dict[str, int] = {}
+    for label, pattern in patterns.items():
+        out, count = re.subn(pattern, f"[REDACTED_{label.upper()}]", out, flags=re.IGNORECASE)
+        counts[label] = count
+    return out, counts
+
+
+app = FastAPI(
+    title="WORKMINE API",
+    version=VERSION,
+    description="A pay-per-call digital microservice farm with optional x402 USDC payments.",
+)
+
+init_db()
+
+if PAYMENT_MODE == "x402":
+    if not PAY_TO:
+        raise RuntimeError("WORKMINE_PAYMENT_MODE=x402 requires PAY_TO receiving address")
+    try:
+        from x402.extensions.bazaar import OutputConfig, declare_discovery_extension
+        from x402.http import FacilitatorConfig, HTTPFacilitatorClient, PaymentOption
+        from x402.http.middleware.fastapi import PaymentMiddlewareASGI
+        from x402.http.types import RouteConfig
+        from x402.mechanisms.evm.exact import ExactEvmServerScheme
+        from x402.server import x402ResourceServer
+
+        facilitator = HTTPFacilitatorClient(FacilitatorConfig(url=X402_FACILITATOR_URL))
+        server = x402ResourceServer(facilitator)
+        server.register(X402_NETWORK, ExactEvmServerScheme())
+
+        def discovery(sample_input: dict[str, Any], input_schema: dict[str, Any], example: Any) -> dict[str, Any]:
+            return declare_discovery_extension(
+                input=sample_input,
+                input_schema=input_schema,
+                output=OutputConfig(example=example),
+            )
+
+        routes: dict[str, RouteConfig] = {}
+        for name, meta in PRODUCTS.items():
+            if name == "pdf_extract":
+                ext = {}
+            elif name == "normalize":
+                ext = discovery(
+                    {"text": "  Hello   world  ", "lowercase": False, "strip_accents": False},
+                    {"type": "object", "properties": {"text": {"type": "string"}, "lowercase": {"type": "boolean"}, "strip_accents": {"type": "boolean"}}, "required": ["text"]},
+                    {"text": "Hello world", "chars": 11},
+                )
+            elif name == "keywords":
+                ext = discovery(
+                    {"text": "AI agents buy APIs automatically", "limit": 5},
+                    {"type": "object", "properties": {"text": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["text"]},
+                    {"keywords": [{"keyword": "agents", "count": 1}]},
+                )
+            elif name == "repair_json":
+                ext = discovery(
+                    {"text": "{'ok': true,}"},
+                    {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
+                    {"value": {"ok": True}},
+                )
+            elif name == "redact":
+                ext = discovery(
+                    {"text": "Contact a@example.com"},
+                    {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
+                    {"text": "Contact [REDACTED_EMAIL]", "redactions": {"email": 1}},
+                )
+            else:
+                ext = discovery(
+                    {"html": "<h1>Hello</h1><a href='https://example.com'>Example</a>"},
+                    {"type": "object", "properties": {"html": {"type": "string"}}, "required": ["html"]},
+                    {"text": "Hello Example", "links": ["https://example.com"]},
+                )
+            kwargs: dict[str, Any] = {
+                "accepts": [PaymentOption(scheme="exact", price=f"${meta['price']:.3f}" if meta["price"] < 0.01 else f"${meta['price']:.2f}", network=X402_NETWORK, pay_to=PAY_TO)],
+                "description": meta["description"],
+                "mime_type": "application/json",
+                "service_name": "WORKMINE",
+                "tags": meta["tags"],
+            }
+            if PUBLIC_BASE_URL:
+                kwargs["resource"] = PUBLIC_BASE_URL + meta["path"]
+            if ext:
+                kwargs["extensions"] = ext
+            routes[f"POST {meta['path']}"] = RouteConfig(**kwargs)
+
+        app.add_middleware(PaymentMiddlewareASGI, routes=routes, server=server)
+    except Exception as exc:
+        raise RuntimeError(f"Unable to initialize x402 payment middleware: {exc}") from exc
+
+
+@app.get("/health")
+def health() -> dict[str, Any]:
+    return {
+        "ok": True,
+        "service": APP_NAME,
+        "version": VERSION,
+        "payment_mode": "x402" if payment_enabled() else "open",
+        "network": X402_NETWORK if payment_enabled() else None,
+    }
+
+
+@app.get("/catalog")
+def catalog() -> dict[str, Any]:
+    return {
+        "service": APP_NAME,
+        "version": VERSION,
+        "payment_mode": "x402" if payment_enabled() else "open",
+        "currency": "USD denominated; settled by x402 when enabled",
+        "products": [
+            {"name": name, **meta, "margin_per_call": round(meta["price"] - meta["estimated_cost"], 6)}
+            for name, meta in PRODUCTS.items()
+        ],
+    }
+
+
+@app.get("/stats")
+def stats() -> dict[str, Any]:
+    return summary_stats()
+
+
+@app.get("/", response_class=HTMLResponse)
+def home() -> str:
+    stats_data = summary_stats()
+    rows = "".join(
+        f"<tr><td>{escape(name)}</td><td><code>POST {escape(meta['path'])}</code></td><td>${meta['price']:.3f}</td><td>{escape(meta['description'])}</td></tr>"
+        for name, meta in PRODUCTS.items()
+    )
+    return f"""<!doctype html>
+<html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
+<title>WORKMINE</title><style>
+body{{font-family:ui-sans-serif,system-ui,-apple-system;max-width:1050px;margin:40px auto;padding:0 18px;color:#111}}
+.hero{{padding:28px;border:1px solid #ddd;border-radius:18px;background:#fafafa}} h1{{font-size:44px;margin:0 0 8px}}
+.kpis{{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:20px 0}}
+.kpi{{border:1px solid #ddd;border-radius:12px;padding:14px}} .n{{font-size:28px;font-weight:700}}
+table{{width:100%;border-collapse:collapse;margin-top:22px}}th,td{{padding:12px;border-bottom:1px solid #e5e5e5;text-align:left;vertical-align:top}}
+code{{font-size:12px}} .pill{{display:inline-block;padding:6px 10px;border-radius:999px;background:#111;color:white}}
+a{{color:#111}} </style></head><body>
+<div class='hero'><div class='pill'>{'LIVE x402' if payment_enabled() else 'OPEN TEST MODE'}</div><h1>WORKMINE</h1>
+<p>Pay-per-call digital microservice farm. Machines call. Machines pay. The router measures margin per endpoint.</p>
+<div class='kpis'><div class='kpi'><div>Calls</div><div class='n'>{stats_data['calls']}</div></div>
+<div class='kpi'><div>Revenue</div><div class='n'>${stats_data['revenue_usd']:.4f}</div></div>
+<div class='kpi'><div>Est. cost</div><div class='n'>${stats_data['estimated_cost_usd']:.4f}</div></div>
+<div class='kpi'><div>Gross profit</div><div class='n'>${stats_data['gross_profit_usd']:.4f}</div></div></div>
+<p><a href='/docs'>Interactive API docs</a> · <a href='/catalog'>Machine-readable catalog</a> · <a href='/stats'>Stats JSON</a></p></div>
+<table><thead><tr><th>Product</th><th>Endpoint</th><th>Price/call</th><th>Purpose</th></tr></thead><tbody>{rows}</tbody></table>
+</body></html>"""
+
+
+@app.post("/v1/text/normalize")
+def api_normalize(payload: NormalizeInput) -> dict[str, Any]:
+    started = time.perf_counter()
+    value = normalize_text(payload.text, payload.lowercase, payload.strip_accents)
+    record_event("normalize", started)
+    return {"text": value, "chars": len(value)}
+
+
+@app.post("/v1/text/keywords")
+def api_keywords(payload: KeywordsInput) -> dict[str, Any]:
+    started = time.perf_counter()
+    result = extract_keywords(payload.text, payload.limit)
+    record_event("keywords", started)
+    return {"keywords": result, "count": len(result)}
+
+
+@app.post("/v1/json/repair")
+def api_repair_json(payload: JsonRepairInput) -> dict[str, Any]:
+    started = time.perf_counter()
+    try:
+        repaired = repair_json(payload.text, return_objects=True)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Could not repair JSON: {exc}") from exc
+    record_event("repair_json", started)
+    return {"value": repaired}
+
+
+@app.post("/v1/text/redact")
+def api_redact(payload: TextInput) -> dict[str, Any]:
+    started = time.perf_counter()
+    value, counts = redact_text(payload.text)
+    record_event("redact", started)
+    return {"text": value, "redactions": counts}
+
+
+@app.post("/v1/html/to-text")
+def api_html_to_text(payload: HtmlInput) -> dict[str, Any]:
+    started = time.perf_counter()
+    soup = BeautifulSoup(payload.html, "html.parser")
+    for tag in soup(["script", "style", "noscript"]):
+        tag.decompose()
+    text = "\n".join(line.strip() for line in soup.get_text("\n").splitlines() if line.strip())
+    links = []
+    for a in soup.find_all("a", href=True):
+        href = str(a.get("href", "")).strip()
+        if href and href not in links:
+            links.append(href)
+        if len(links) >= 100:
+            break
+    record_event("html_to_text", started)
+    return {"text": text[:MAX_TEXT_CHARS], "links": links}
+
+
+@app.post("/v1/pdf/extract-text")
+async def api_pdf_extract(file: UploadFile = File(...)) -> dict[str, Any]:
+    started = time.perf_counter()
+    raw = await file.read(MAX_PDF_BYTES + 1)
+    if len(raw) > MAX_PDF_BYTES:
+        raise HTTPException(status_code=413, detail=f"PDF exceeds {MAX_PDF_BYTES} bytes")
+    if not raw.startswith(b"%PDF"):
+        raise HTTPException(status_code=415, detail="Expected a PDF file")
+    try:
+        reader = PdfReader(io.BytesIO(raw))
+        pages = []
+        for index, page in enumerate(reader.pages[:200], start=1):
+            pages.append({"page": index, "text": page.extract_text() or ""})
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Could not parse PDF: {exc}") from exc
+    record_event("pdf_extract", started)
+    return {"filename": file.filename, "pages": len(pages), "content": pages}

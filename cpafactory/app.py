@@ -466,12 +466,15 @@ def cpa_import(x_admin_token: str | None = Header(default=None)):
         raise HTTPException(502,f"Admitad API: {e}")
     items=data.get("results",[]) if isinstance(data,dict) else data
     added=updated=skipped=0
+    programs=[]
     with db() as c:
         for v in items:
             if str(v.get("connection_status","active"))!="active": continue
             cid=v.get("id"); name=v.get("name"); gotolink=v.get("gotolink")
             if not cid or not name or not gotolink:
                 skipped+=1; continue
+            if len(programs) < 10:
+                programs.append({"id":cid,"name":name,"regions":[x.get("region") for x in (v.get("regions") or []) if x.get("region")],"traffics":[{"id":x.get("id"),"name":x.get("name"),"enabled":x.get("enabled")} for x in (v.get("traffics") or [])],"epc":v.get("epc"),"cr":v.get("cr")})
             rules=json.dumps({"regions":v.get("regions") or [],"traffics":v.get("traffics") or [],"moderation":v.get("moderation"),"action_countries":v.get("action_countries")},ensure_ascii=False)
             rating=float(v.get("rating") or 0); epc=float(v.get("epc") or 0); cr=float(v.get("cr") or 0)
             rate=_first_rate(v.get("action_ranges"))
@@ -485,7 +488,7 @@ def cpa_import(x_admin_token: str | None = Header(default=None)):
                     values(%s,%s,0,0,%s,%s,true,'admitad',%s,%s,%s,%s,%s,%s)""",
                     (name,"Admitad",gotolink,rules,str(cid),rating,epc,cr,rate,v.get("site_url")))
                 added+=1
-    return {"status":"ok","source":"admitad","received":len(items),"added":added,"updated":updated,"skipped":skipped}
+    return {"status":"ok","source":"admitad","received":len(items),"added":added,"updated":updated,"skipped":skipped,"programs":programs}
 
 @app.get("/api/cpa/admitad/status")
 def admitad_status():

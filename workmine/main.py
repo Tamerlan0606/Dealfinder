@@ -260,11 +260,19 @@ def summary_stats() -> dict[str, Any]:
             FROM events GROUP BY endpoint ORDER BY SUM(gross_profit_usd) DESC, COUNT(*) DESC
             """
         ).fetchall()
+        settled = con.execute(
+            "SELECT COUNT(*), COALESCE(SUM(amount_usdc),0) FROM settlements"
+        ).fetchone()
+        recent_settlements = con.execute(
+            "SELECT ts, transaction_id, payer, network, amount_usdc FROM settlements ORDER BY id DESC LIMIT 20"
+        ).fetchall()
     return {
         "calls": total[0],
-        "revenue_usd": round(total[1], 6),
+        "modeled_billable_usd": round(total[1], 6),
+        "actual_settlements": settled[0],
+        "actual_settled_usdc": round(settled[1], 6),
         "estimated_cost_usd": round(total[2], 6),
-        "gross_profit_usd": round(total[3], 6),
+        "modeled_gross_profit_usd": round(total[3], 6),
         "payment_mode": "x402" if payment_enabled() else "open",
         "products": [
             {
@@ -273,6 +281,10 @@ def summary_stats() -> dict[str, Any]:
                 "avg_duration_ms": round(r[5], 2),
             }
             for r in rows
+        ],
+        "recent_settlements": [
+            {"ts": r[0], "transaction": r[1], "payer": r[2], "network": r[3], "amount_usdc": r[4]}
+            for r in recent_settlements
         ],
     }
 

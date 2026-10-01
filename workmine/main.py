@@ -5,6 +5,7 @@ import re
 import sqlite3
 import time
 import unicodedata
+import urllib.request
 from collections import Counter
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -292,6 +293,57 @@ if PAYMENT_MODE == "x402":
 @app.get("/v1/ping")
 def paid_ping(nonce: str = "") -> dict[str, Any]:
     return {"ok": True, "service": APP_NAME, "message": "paid pong", "nonce": nonce, "ts": utcnow()}
+
+
+@app.on_event("startup")
+def register_agent_marketplaces() -> None:
+    if not PUBLIC_BASE_URL:
+        return
+    payload = json.dumps({"origin": PUBLIC_BASE_URL}).encode("utf-8")
+    req = urllib.request.Request(
+        "https://agent402.tools/api/index/register",
+        data=payload,
+        headers={"Content-Type": "application/json", "User-Agent": "WORKMINE/0.1"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            body = resp.read(2000).decode("utf-8", errors="replace")
+            print(f"Agent402 registration: HTTP {resp.status} {body}")
+    except Exception as exc:
+        print(f"Agent402 registration failed: {exc}")
+
+
+@app.get("/.well-known/x402")
+def well_known_x402() -> dict[str, Any]:
+    base = PUBLIC_BASE_URL or ""
+    resources = [base + "/v1/ping"] + [base + meta["path"] for meta in PRODUCTS.values()]
+    return {
+        "spec": "agent402-service-manifest/1",
+        "version": 1,
+        "resources": resources,
+        "name": APP_NAME,
+        "summary": "Low-cost deterministic utility APIs for autonomous agents, paid per call over x402.",
+        "homepage": base,
+        "ecosystem": {"primaryChain": "Base", "primaryChainId": 8453, "currency": "USDC", "protocol": "x402"},
+        "payment": {
+            "x402": {
+                "version": 2,
+                "currency": "USDC",
+                "networks": [X402_NETWORK],
+                "primaryNetwork": X402_NETWORK,
+                "priceRange": "$0.001-$0.010",
+                "payTo": PAY_TO,
+                "nonCustodial": True,
+            }
+        },
+        "machineReadable": {
+            "openapi": base + "/openapi.json",
+            "catalog": base + "/catalog",
+            "llmsTxt": base + "/llms.txt",
+            "discovery": base + "/x402/discovery.json",
+        },
+    }
 
 
 @app.get("/x402/discovery.json")

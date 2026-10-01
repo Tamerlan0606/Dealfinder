@@ -335,7 +335,7 @@ if PAYMENT_MODE == "x402":
     if not PAY_TO:
         raise RuntimeError("WORKMINE_PAYMENT_MODE=x402 requires PAY_TO receiving address")
     try:
-        from x402.extensions.bazaar import OutputConfig, declare_discovery_extension
+        from x402.extensions.bazaar import OutputConfig, bazaar_resource_server_extension, declare_discovery_extension
         from x402.http import FacilitatorConfig, HTTPFacilitatorClient, PaymentOption
         from x402.http.middleware.fastapi import PaymentMiddlewareASGI
         from x402.http.types import RouteConfig
@@ -345,20 +345,81 @@ if PAYMENT_MODE == "x402":
         facilitator = HTTPFacilitatorClient(FacilitatorConfig(url=X402_FACILITATOR_URL))
         server = x402ResourceServer(facilitator)
         server.register(X402_NETWORK, ExactEvmServerScheme())
+        server.register_extension(bazaar_resource_server_extension)
         server.on_after_settle(record_settlement)
 
-        def discovery(sample_input: dict[str, Any], input_schema: dict[str, Any], example: Any) -> dict[str, Any]:
+        def discovery(sample_input: dict[str, Any], input_schema: dict[str, Any], example: Any, body_type: str | None = None) -> dict[str, Any]:
             return declare_discovery_extension(
                 input=sample_input,
                 input_schema=input_schema,
+                body_type=body_type,
                 output=OutputConfig(example=example),
             )
 
+        post_examples: dict[str, tuple[dict[str, Any], dict[str, Any], Any]] = {
+            "text_normalize": (
+                {"text": "  Hello   world  "},
+                {"type": "object", "properties": {"text": {"type": "string", "description": "Text to normalize"}}, "required": ["text"]},
+                {"text": "Hello world"},
+            ),
+            "text_keywords": (
+                {"text": "Autonomous agents pay for useful API calls with USDC."},
+                {"type": "object", "properties": {"text": {"type": "string", "description": "Text to extract keywords from"}}, "required": ["text"]},
+                {"keywords": ["agents", "api", "calls", "usdc"]},
+            ),
+            "json_repair": (
+                {"text": "{name: 'agent', active: true}"},
+                {"type": "object", "properties": {"text": {"type": "string", "description": "Malformed JSON text"}}, "required": ["text"]},
+                {"value": {"name": "agent", "active": True}},
+            ),
+            "text_redact": (
+                {"text": "Contact test@example.com or +1 555 010 2000"},
+                {"type": "object", "properties": {"text": {"type": "string", "description": "Text containing identifiers to redact"}}, "required": ["text"]},
+                {"text": "Contact [EMAIL] or [PHONE]"},
+            ),
+            "html_to_text": (
+                {"text": "<p>Hello <a href='https://example.com'>world</a></p>"},
+                {"type": "object", "properties": {"text": {"type": "string", "description": "HTML document or fragment"}}, "required": ["text"]},
+                {"text": "Hello world", "links": ["https://example.com"]},
+            ),
+            "hash": (
+                {"text": "hello", "algorithm": "sha256"},
+                {"type": "object", "properties": {"text": {"type": "string"}, "algorithm": {"type": "string", "enum": ["sha256", "sha512", "sha1", "md5"]}}, "required": ["text"]},
+                {"algorithm": "sha256", "digest": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"},
+            ),
+            "hmac": (
+                {"text": "hello", "key": "secret", "algorithm": "sha256"},
+                {"type": "object", "properties": {"text": {"type": "string"}, "key": {"type": "string"}, "algorithm": {"type": "string", "enum": ["sha256", "sha512"]}}, "required": ["text", "key"]},
+                {"algorithm": "sha256", "digest": "signed-hex-digest"},
+            ),
+            "base64_encode": (
+                {"text": "hello"},
+                {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
+                {"value": "aGVsbG8="},
+            ),
+            "base64_decode": (
+                {"text": "aGVsbG8="},
+                {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
+                {"value": "hello"},
+            ),
+            "url_encode": (
+                {"text": "hello world"},
+                {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
+                {"value": "hello%20world"},
+            ),
+            "url_decode": (
+                {"text": "hello%20world"},
+                {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
+                {"value": "hello world"},
+            ),
+        }
+
         routes: dict[str, RouteConfig] = {}
         for name, meta in PRODUCTS.items():
-            # Bazaar extensions are omitted on POST because Bazaar discovery
-            # currently validates GET/HEAD/DELETE inputs only.
-            ext = {}
+            ext: dict[str, Any] = {}
+            if name in post_examples:
+                sample, schema, example = post_examples[name]
+                ext = discovery(sample, schema, example, body_type="json")
             kwargs: dict[str, Any] = {
                 "accepts": [PaymentOption(scheme="exact", price=f"${meta['price']:.3f}" if meta["price"] < 0.01 else f"${meta['price']:.2f}", network=X402_NETWORK, pay_to=PAY_TO)],
                 "description": meta["description"],

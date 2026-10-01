@@ -40,3 +40,20 @@ The repository also contains the production MarketStart AI content funnel in `ma
 - Outbound traffic is routed through CPA Factory for click attribution
 - Render production service deploys automatically from `main`
 - CI: `.github/workflows/marketstart-ci.yml`
+
+
+## WORKMINE
+
+WORKMINE is the repository's x402 pay-per-call utility API and remote MCP discovery gateway for autonomous agents.
+
+- Paid API: https://workmine-api.onrender.com
+- Remote MCP: https://workmine-mcp.onrender.com/mcp
+- Protocol: x402 v2
+- Settlement: USDC on Base mainnet (eip155:8453)
+- Machine catalog: https://workmine-api.onrender.com/catalog
+- Agent manifest: https://workmine-api.onrender.com/.well-known/x402
+- LLM discovery: https://workmine-api.onrender.com/llms.txt
+- OpenAPI: https://workmine-api.onrender.com/openapi.json
+- MCP Registry descriptor: workmine/server.json
+
+The WORKMINE implementation is isolated under `workmine/` and does not change the DealFinder runtime.

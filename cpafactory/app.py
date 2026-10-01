@@ -1033,3 +1033,82 @@ try:
     import enhancements
 except Exception as e:
     print("CPA_ENHANCEMENTS_IMPORT_ERROR", type(e).__name__, str(e), flush=True)
+
+
+# --- Admitad publisher integration ---
+def _admitad_token():
+    client_id = os.getenv("ADMITAD_CLIENT_ID", "").strip()
+    client_secret = os.getenv("ADMITAD_CLIENT_SECRET", "").strip()
+    if not client_id or not client_secret:
+        raise HTTPException(503, "Admitad API credentials are not configured")
+    scope = "advcampaigns advcampaigns_for_website websites statistics"
+    body = urllib.parse.urlencode({"grant_type":"client_credentials","client_id":client_id,"scope":scope}).encode()
+    import base64
+    basic = base64.b64encode((client_id + ":" + client_secret).encode()).decode()
+    req = urllib.request.Request("https://api.admitad.com/token/", data=body, method="POST",
+        headers={"Authorization":"Basic " + basic,"Content-Type":"application/x-www-form-urlencoded;charset=UTF-8"})
+    with urllib.request.urlopen(req, timeout=25) as resp:
+        return json.loads(resp.read().decode())["access_token"]
+
+def _admitad_get(path, token):
+    req = urllib.request.Request("https://api.admitad.com" + path,
+        headers={"Authorization":"Bearer " + token,"Accept":"application/json"})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read().decode())
+
+def _num(v):
+    try: return float(v or 0)
+    except Exception: return 0.0
+
+@app.get("/admin/admitad/status")
+def admitad_status(x_admin_token: str | None = Header(default=None)):
+    require_admin(x_admin_token)
+    return {"configured": bool(os.getenv("ADMITAD_CLIENT_ID") and os.getenv("ADMITAD_CLIENT_SECRET")),
+            "mode":"publisher","sync":"active-programs-only"}
+
+@app.post("/admin/admitad/sync")
+def admitad_sync(x_admin_token: str | None = Header(default=None)):
+    require_admin(x_admin_token)
+    token = _admitad_token()
+    spaces = _admitad_get("/websites/v2/?status=active", token)
+    if isinstance(spaces, dict): spaces = spaces.get("results", spaces.get("data", []))
+    imported = updated = 0
+    active_spaces = []
+    for w in spaces or []:
+        wid = w.get("id")
+        if not wid: continue
+        active_spaces.append({"id":wid,"name":w.get("name"),"url":w.get("site_url")})
+        data = _admitad_get(f"/advcampaigns/website/{wid}/?connection_status=active&limit=200&language=en", token)
+        for p in (data.get("results", []) if isinstance(data, dict) else []):
+            pid = str(p.get("id") or "")
+            if not pid: continue
+            actions = p.get("actions") or []
+            payouts = [str(a.get("payment_size","")).strip() for a in actions if a.get("payment_size")]
+            numeric = []
+            for pay in payouts:
+                if "%" not in pay:
+                    m = re.search(r"[-+]?\d+(?:[.,]\d+)?", pay)
+                    if m: numeric.append(_num(m.group(0).replace(",",".")))
+            commission = max(numeric) if numeric else 0
+            currency = p.get("currency") or ""
+            cats = ", ".join(x.get("name","") for x in (p.get("categories") or []) if x.get("name"))
+            regions = ",".join(x.get("region","") for x in (p.get("regions") or []) if x.get("region"))
+            traffic = json.dumps({"regions":regions,"traffics":p.get("traffics") or [],"actions":actions,"currency":currency}, ensure_ascii=False)
+            gotolink = p.get("gotolink") or ""
+            if not gotolink: continue
+            with db() as conn:
+                existing = conn.execute("select id from offers where source=%s and external_id=%s", ("admitad",pid)).fetchone()
+                vals=(p.get("name") or f"Admitad {pid}",p.get("name") or "",commission,gotolink,traffic,
+                      _num(p.get("rating")),_num(p.get("epc")),_num(p.get("cr")),"; ".join(payouts),
+                      p.get("site_url") or "",p.get("image") or "",p.get("description") or "",cats)
+                if existing:
+                    conn.execute("""update offers set name=%s,merchant=%s,commission=%s,tracking_url=%s,traffic_rules=%s,
+                      rating=%s,epc=%s,cr=%s,cpa_rate=%s,site_url=%s,image_url=%s,description=%s,category=%s,active=true
+                      where source='admitad' and external_id=%s""", vals+(pid,))
+                    updated += 1
+                else:
+                    conn.execute("""insert into offers(name,merchant,commission,tracking_url,traffic_rules,rating,epc,cr,cpa_rate,
+                      site_url,image_url,description,category,active,source,external_id)
+                      values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,true,'admitad',%s)""", vals+(pid,))
+                    imported += 1
+    return {"ok":True,"spaces":active_spaces,"imported":imported,"updated":updated}

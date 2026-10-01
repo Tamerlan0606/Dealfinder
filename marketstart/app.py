@@ -140,21 +140,18 @@ def rss():
 
 
 GLOBAL_POSTS = {
-    "margin": {
-        "hook": "Revenue is not profit.",
-        "body": "Before you launch a product, model fees, fulfillment, returns, ads and taxes. A product that looks profitable at the selling price can lose money after variable costs.",
-        "cta": "Use the free marketplace launch framework at MarketStart AI."
-    },
-    "inventory": {
-        "hook": "Your first order should be a test, not a bet.",
-        "body": "Start with the smallest inventory batch that can validate demand. Measure conversion, returns and contribution margin before you scale stock.",
-        "cta": "Build the numbers before you buy inventory."
-    },
-    "launch": {
-        "hook": "A marketplace launch is a sequence, not a guess.",
-        "body": "Validate demand, calculate unit economics, prepare the listing, choose fulfillment, launch a small test and scale only after the data confirms the thesis.",
-        "cta": "Follow the launch framework at MarketStart AI."
-    }
+    "margin": {"hook":"Revenue is not profit.","body":"Before you launch a product, model fees, fulfillment, returns, ads and taxes. A product that looks profitable at the selling price can lose money after variable costs.","cta":"Use the free marketplace launch framework at MarketStart AI."},
+    "inventory": {"hook":"Your first order should be a test, not a bet.","body":"Start with the smallest inventory batch that can validate demand. Measure conversion, returns and contribution margin before you scale stock.","cta":"Build the numbers before you buy inventory."},
+    "launch": {"hook":"A marketplace launch is a sequence, not a guess.","body":"Validate demand, calculate unit economics, prepare the listing, choose fulfillment, launch a small test and scale only after the data confirms the thesis.","cta":"Follow the launch framework at MarketStart AI."},
+    "returns": {"hook":"Returns belong in your margin model.","body":"A 30% gross margin can disappear when return shipping, damaged inventory and marketplace fees are ignored. Model the expected return rate before setting your price.","cta":"Price for the real transaction, not the perfect one."},
+    "conversion": {"hook":"Traffic cannot rescue a weak listing.","body":"Before buying more clicks, improve the first image, title, offer clarity, reviews and delivery promise. Conversion work usually comes before traffic scaling.","cta":"Fix conversion before increasing ad spend."},
+    "pricing": {"hook":"The cheapest seller does not always win.","body":"Price is one variable. Delivery speed, reviews, listing quality, trust and stock availability also affect conversion. Compete on the whole offer.","cta":"Optimize the offer, not only the price."},
+    "stock": {"hook":"Out of stock is a growth tax.","body":"Stockouts break ranking momentum and waste acquisition work. Track sell-through rate and reorder lead time so replenishment starts before inventory becomes critical.","cta":"Treat inventory planning as part of marketing."},
+    "ads": {"hook":"Ads amplify economics. They do not fix them.","body":"If contribution margin is negative before advertising, more traffic usually scales the loss. Know your break-even acquisition cost before launching campaigns.","cta":"Calculate break-even CAC before buying traffic."},
+    "supplier": {"hook":"Your supplier quote is not your landed cost.","body":"Include freight, duties, inspection, packaging, payment fees and defect allowance. Compare suppliers on landed cost and reliability, not unit price alone.","cta":"Model landed cost before choosing a supplier."},
+    "reviews": {"hook":"Reviews are a conversion asset.","body":"Customers use recent reviews to reduce purchase risk. Improve product quality, instructions, packaging and support so review growth comes from a better customer experience.","cta":"Engineer the experience that earns better reviews."},
+    "cashflow": {"hook":"Profit can grow while cash disappears.","body":"Inventory businesses pay for stock before many sales are collected. Forecast purchase timing, marketplace payout delays and taxes so growth does not create a cash gap.","cta":"Scale with a cash-flow plan, not only a P&L."},
+    "testing": {"hook":"One test should answer one question.","body":"Change one major variable at a time: price, hero image, title or promotion. Clean tests make it easier to identify what actually moved conversion.","cta":"Make every experiment produce a decision."}
 }
 
 @app.get("/global", response_class=HTMLResponse)

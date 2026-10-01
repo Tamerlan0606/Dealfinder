@@ -345,6 +345,7 @@ if PAYMENT_MODE == "x402":
         facilitator = HTTPFacilitatorClient(FacilitatorConfig(url=X402_FACILITATOR_URL))
         server = x402ResourceServer(facilitator)
         server.register(X402_NETWORK, ExactEvmServerScheme())
+        server.on_after_settle(record_settlement)
 
         def discovery(sample_input: dict[str, Any], input_schema: dict[str, Any], example: Any) -> dict[str, Any]:
             return declare_discovery_extension(
@@ -355,38 +356,9 @@ if PAYMENT_MODE == "x402":
 
         routes: dict[str, RouteConfig] = {}
         for name, meta in PRODUCTS.items():
-            if name == "pdf_extract":
-                ext = {}
-            elif name == "normalize":
-                ext = discovery(
-                    {"text": "  Hello   world  ", "lowercase": False, "strip_accents": False},
-                    {"type": "object", "properties": {"text": {"type": "string"}, "lowercase": {"type": "boolean"}, "strip_accents": {"type": "boolean"}}, "required": ["text"]},
-                    {"text": "Hello world", "chars": 11},
-                )
-            elif name == "keywords":
-                ext = discovery(
-                    {"text": "AI agents buy APIs automatically", "limit": 5},
-                    {"type": "object", "properties": {"text": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["text"]},
-                    {"keywords": [{"keyword": "agents", "count": 1}]},
-                )
-            elif name == "repair_json":
-                ext = discovery(
-                    {"text": "{'ok': true,}"},
-                    {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
-                    {"value": {"ok": True}},
-                )
-            elif name == "redact":
-                ext = discovery(
-                    {"text": "Contact a@example.com"},
-                    {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
-                    {"text": "Contact [REDACTED_EMAIL]", "redactions": {"email": 1}},
-                )
-            else:
-                ext = discovery(
-                    {"html": "<h1>Hello</h1><a href='https://example.com'>Example</a>"},
-                    {"type": "object", "properties": {"html": {"type": "string"}}, "required": ["html"]},
-                    {"text": "Hello Example", "links": ["https://example.com"]},
-                )
+            # Bazaar extensions are omitted on POST because Bazaar discovery
+            # currently validates GET/HEAD/DELETE inputs only.
+            ext = {}
             kwargs: dict[str, Any] = {
                 "accepts": [PaymentOption(scheme="exact", price=f"${meta['price']:.3f}" if meta["price"] < 0.01 else f"${meta['price']:.2f}", network=X402_NETWORK, pay_to=PAY_TO)],
                 "description": meta["description"],

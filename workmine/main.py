@@ -434,6 +434,31 @@ def paid_ping(nonce: str = "") -> dict[str, Any]:
     return {"ok": True, "service": APP_NAME, "message": "paid pong", "nonce": nonce, "ts": utcnow()}
 
 
+@app.get("/v1/hash")
+def api_hash_get(text: str, algorithm: str = "sha256") -> dict[str, Any]:
+    return api_hash(HashInput(text=text, algorithm=algorithm))
+
+
+@app.get("/v1/base64/encode")
+def api_base64_encode_get(text: str) -> dict[str, Any]:
+    return api_base64_encode(TextInput(text=text))
+
+
+@app.get("/v1/base64/decode")
+def api_base64_decode_get(text: str) -> dict[str, Any]:
+    return api_base64_decode(TextInput(text=text))
+
+
+@app.get("/v1/url/encode")
+def api_url_encode_get(text: str) -> dict[str, Any]:
+    return api_url_encode(TextInput(text=text))
+
+
+@app.get("/v1/url/decode")
+def api_url_decode_get(text: str) -> dict[str, Any]:
+    return api_url_decode(TextInput(text=text))
+
+
 @app.on_event("startup")
 def register_agent_marketplaces() -> None:
     if not PUBLIC_BASE_URL:

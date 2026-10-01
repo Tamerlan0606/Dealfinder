@@ -1,4 +1,4 @@
-import os, re, json, html, urllib.request, urllib.parse, time
+import os, re, json, html, urllib.request, urllib.parse, time, hashlib
 from fastapi import Header, HTTPException
 from fastapi.responses import HTMLResponse
 import app as core
@@ -59,6 +59,17 @@ def migrate():
               status text default 'planned',external_id text,external_url text,scheduled_at timestamptz,last_error text,
               created_at timestamptz default now(),published_at timestamptz)""")
         c.execute("create unique index if not exists uq_distribution_content_channel on distribution_queue(content_id,channel)")
+        if core.using_sqlite():
+            c.execute("""create table if not exists telegram_publications(
+              dedup_key text primary key, queue_id integer, content_id integer, status text not null,
+              message_id text, external_url text, created_at text default CURRENT_TIMESTAMP,
+              published_at text, last_error text)""")
+        else:
+            c.execute("""create table if not exists telegram_publications(
+              dedup_key text primary key, queue_id bigint, content_id int, status text not null,
+              message_id text, external_url text, created_at timestamptz default now(),
+              published_at timestamptz, last_error text)""")
+
     print("CPA_DISTRIBUTION_MIGRATION_OK",flush=True)
 
 def _enrich_rows(limit=100):
@@ -227,48 +238,98 @@ def _telegram_send(text):
     return payload["result"]
 
 def publish_telegram(limit=1):
-    """Publish planned Telegram distribution rows exactly once.
+    """Publish Telegram rows with persistent idempotency.
 
-    Rows are claimed before the network call. Failures are returned to planned so
-    a later cycle can retry; successful Telegram message_id is persisted.
+    Safety rules:
+    - Never auto-publish from ephemeral SQLite in production-like operation.
+    - Persist a deterministic dedup key BEFORE calling Telegram.
+    - A successfully reserved/published content+channel fingerprint cannot be sent again,
+      even if distribution_queue is recreated or a Render instance restarts.
     """
     if not _telegram_configured():
         return {"status":"not_configured","published":0}
-    published=[]; errors=[]
+
+    # /tmp SQLite is ephemeral on Render. Publishing from it caused the same queue row
+    # to be recreated after restarts and sent repeatedly. Fail closed instead.
+    if core.using_sqlite():
+        print("CPA_TELEGRAM_BLOCKED_EPHEMERAL_DB", flush=True)
+        return {"status":"blocked_ephemeral_db","published":0,
+                "error":"Telegram auto-publish requires persistent DATABASE_URL/Postgres"}
+
+    published=[]; errors=[]; skipped=[]
     for _ in range(max(1,min(int(limit),5))):
         with core.db() as c:
-            row=c.execute("""select q.id queue_id,q.content_id,c.variants_json,c.title,o.name offer_name
+            row=c.execute("""select q.id queue_id,q.content_id,c.offer_id,c.variants_json,c.title,o.name offer_name
               from distribution_queue q join content c on c.id=q.content_id join offers o on o.id=c.offer_id
               where q.channel='telegram' and q.status='planned'
               order by q.id asc limit 1""").fetchone()
             if not row: break
+
             qid=int(row["queue_id"])
-            claimed=c.execute("update distribution_queue set status='publishing',last_error=null where id=%s and status='planned' returning id",(qid,)).fetchone()
-            if not claimed: continue
-        try:
             variants=json.loads(row["variants_json"] or "{}")
-            text=_text(variants.get("commercial") or row["title"] or row["offer_name"])
+            body_text=_text(variants.get("commercial") or row["title"] or row["offer_name"])
+            # Stable across queue recreation/restarts: same offer + same commercial copy + telegram.
+            material=f"telegram|offer:{int(row['offer_id'])}|{body_text}".encode("utf-8")
+            dedup_key=hashlib.sha256(material).hexdigest()
+
+            # Reserve idempotency key atomically before any external side effect.
+            reserved=c.execute("""insert into telegram_publications(dedup_key,queue_id,content_id,status)
+              values(%s,%s,%s,'sending') on conflict(dedup_key) do nothing returning dedup_key""",
+              (dedup_key,qid,int(row["content_id"]))).fetchone()
+
+            if not reserved:
+                c.execute("""update distribution_queue set status='duplicate_suppressed',
+                  last_error='duplicate telegram publication suppressed' where id=%s""",(qid,))
+                skipped.append({"queue_id":qid,"reason":"duplicate_suppressed","dedup_key":dedup_key[:12]})
+                print("CPA_TELEGRAM_DUPLICATE_SUPPRESSED",
+                      json.dumps(skipped[-1],ensure_ascii=False),flush=True)
+                continue
+
+            claimed=c.execute("""update distribution_queue set status='publishing',last_error=null
+              where id=%s and status='planned' returning id""",(qid,)).fetchone()
+            if not claimed:
+                c.execute("delete from telegram_publications where dedup_key=%s and status='sending'",(dedup_key,))
+                continue
+
+        try:
+            text_to_send=body_text
             relative=f"/r/{int(row['content_id'])}?source=telegram&channel=telegram"
-            text=text.replace(f"/r/{int(row['content_id'])}?source=content&channel=landing",_public_base_url()+relative)
-            if relative not in text and _public_base_url()+relative not in text:
-                text += "\n\n"+_public_base_url()+relative
-            result=_telegram_send(text[:4096])
+            text_to_send=text_to_send.replace(
+                f"/r/{int(row['content_id'])}?source=content&channel=landing",
+                _public_base_url()+relative)
+            if relative not in text_to_send and _public_base_url()+relative not in text_to_send:
+                text_to_send += "\n\n"+_public_base_url()+relative
+
+            result=_telegram_send(text_to_send[:4096])
             mid=str(result.get("message_id",""))
             chat=result.get("chat") or {}; username=chat.get("username")
             external_url=(f"https://t.me/{username}/{mid}" if username and mid else None)
+
             with core.db() as c:
-                c.execute("update distribution_queue set status='published',external_id=%s,external_url=%s,published_at=current_timestamp,last_error=null where id=%s",(mid,external_url,qid))
+                c.execute("""update distribution_queue set status='published',external_id=%s,
+                  external_url=%s,published_at=current_timestamp,last_error=null where id=%s""",
+                  (mid,external_url,qid))
                 c.execute("update content set status='published' where id=%s",(int(row["content_id"]),))
-            published.append({"queue_id":qid,"message_id":mid,"url":external_url})
+                c.execute("""update telegram_publications set status='published',message_id=%s,
+                  external_url=%s,published_at=current_timestamp,last_error=null where dedup_key=%s""",
+                  (mid,external_url,dedup_key))
+
+            published.append({"queue_id":qid,"message_id":mid,"url":external_url,
+                              "dedup_key":dedup_key[:12]})
             print("CPA_TELEGRAM_PUBLISHED",json.dumps(published[-1],ensure_ascii=False),flush=True)
+
         except Exception as e:
             err=f"{type(e).__name__}: {e}"[:1000]
             with core.db() as c:
                 c.execute("update distribution_queue set status='planned',last_error=%s where id=%s",(err,qid))
+                # Allow retry only when Telegram call failed.
+                c.execute("delete from telegram_publications where dedup_key=%s and status='sending'",(dedup_key,))
             errors.append({"queue_id":qid,"error":err})
             print("CPA_TELEGRAM_ERROR",json.dumps(errors[-1],ensure_ascii=False),flush=True)
             break
-    return {"status":"ok" if not errors else "error","published":len(published),"items":published,"errors":errors}
+
+    return {"status":"ok" if not errors else "error","published":len(published),
+            "items":published,"duplicates_suppressed":len(skipped),"skipped":skipped,"errors":errors}
 
 @core.app.post("/api/telegram/publish")
 def telegram_publish_now(x_admin_token: str|None=Header(default=None)):

@@ -372,6 +372,58 @@ if PAYMENT_MODE == "x402":
                 kwargs["extensions"] = ext
             routes[f"POST {meta['path']}"] = RouteConfig(**kwargs)
 
+        get_products = [
+            (
+                {"path": "/v1/ping", "price": 0.001, "description": "Low-cost paid availability probe for autonomous agents.", "tags": ["ping", "availability", "agent"]},
+                {"nonce": "agent-123"},
+                {"type": "object", "properties": {"nonce": {"type": "string"}}},
+                {"ok": True, "service": APP_NAME, "message": "paid pong", "nonce": "agent-123"},
+            ),
+            (
+                PRODUCTS["hash"],
+                {"text": "hello", "algorithm": "sha256"},
+                {"type": "object", "properties": {"text": {"type": "string"}, "algorithm": {"type": "string"}}, "required": ["text"]},
+                {"algorithm": "sha256", "digest": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"},
+            ),
+            (
+                PRODUCTS["base64_encode"],
+                {"text": "hello"},
+                {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
+                {"value": "aGVsbG8="},
+            ),
+            (
+                PRODUCTS["base64_decode"],
+                {"text": "aGVsbG8="},
+                {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
+                {"value": "hello"},
+            ),
+            (
+                PRODUCTS["url_encode"],
+                {"text": "hello world"},
+                {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
+                {"value": "hello%20world"},
+            ),
+            (
+                PRODUCTS["url_decode"],
+                {"text": "hello%20world"},
+                {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
+                {"value": "hello world"},
+            ),
+        ]
+        for meta, sample, schema, example in get_products:
+            ext = discovery(sample, schema, example)
+            get_kwargs: dict[str, Any] = {
+                "accepts": [PaymentOption(scheme="exact", price=f"$" + (f"{meta['price']:.3f}" if meta["price"] < 0.01 else f"{meta['price']:.2f}"), network=X402_NETWORK, pay_to=PAY_TO)],
+                "description": meta["description"],
+                "mime_type": "application/json",
+                "service_name": APP_NAME,
+                "tags": meta["tags"] + ["bazaar"],
+                "extensions": ext,
+            }
+            if PUBLIC_BASE_URL:
+                get_kwargs["resource"] = PUBLIC_BASE_URL + meta["path"]
+            routes[f"GET {meta['path']}"] = RouteConfig(**get_kwargs)
+
         app.add_middleware(PaymentMiddlewareASGI, routes=routes, server=server)
     except Exception as exc:
         raise RuntimeError(f"Unable to initialize x402 payment middleware: {exc}") from exc

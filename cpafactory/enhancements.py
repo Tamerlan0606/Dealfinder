@@ -37,17 +37,35 @@ def fetch_media(url):
 
 def migrate():
     with core.db() as c:
-        for s in ["alter table offers add column video_url text","alter table offers add column video_url2 text",
-                  "alter table offers add column demand_count real default 0","alter table offers add column demand_checked_at text",
-                  "alter table offers add column yandex_promise real default 0","alter table offers add column description text",
-                  "alter table offers add column category text","alter table offers add column old_price real default 0",
-                  "alter table offers add column discount text","alter table offers add column media_checked_at text",
-                  "alter table offers add column media_type text","alter table offers add column traffic_allowed text",
-                  "alter table content add column media_url text","alter table content add column media_type text",
-                  "alter table content add column landing_slug text","alter table content add column variants_json text",
-                  "alter table content add column source_text text"]:
-            try:c.execute(s)
-            except Exception:pass
+        alters = [
+            ("offers","video_url","text"),
+            ("offers","video_url2","text"),
+            ("offers","demand_count","real default 0"),
+            ("offers","demand_checked_at","text"),
+            ("offers","yandex_promise","real default 0"),
+            ("offers","description","text"),
+            ("offers","category","text"),
+            ("offers","old_price","real default 0"),
+            ("offers","discount","text"),
+            ("offers","media_checked_at","text"),
+            ("offers","media_type","text"),
+            ("offers","traffic_allowed","text"),
+            ("content","media_url","text"),
+            ("content","media_type","text"),
+            ("content","landing_slug","text"),
+            ("content","variants_json","text"),
+            ("content","source_text","text"),
+        ]
+        for table, column, ddl in alters:
+            stmt = f"alter table {table} add column {'if not exists ' if not core.using_sqlite() else ''}{column} {ddl}"
+            if core.using_sqlite():
+                try:
+                    c.execute(stmt)
+                except Exception:
+                    pass
+            else:
+                c.execute(stmt)
+
         if core.using_sqlite():
             c.execute("""create table if not exists distribution_queue(
               id integer primary key autoincrement,content_id integer references content(id),channel text not null,
@@ -58,7 +76,9 @@ def migrate():
               id bigserial primary key,content_id int references content(id),channel text not null,
               status text default 'planned',external_id text,external_url text,scheduled_at timestamptz,last_error text,
               created_at timestamptz default now(),published_at timestamptz)""")
+
         c.execute("create unique index if not exists uq_distribution_content_channel on distribution_queue(content_id,channel)")
+
         if core.using_sqlite():
             c.execute("""create table if not exists telegram_publications(
               dedup_key text primary key, queue_id integer, content_id integer, status text not null,

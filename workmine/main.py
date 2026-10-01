@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 from pypdf import PdfReader
 
 APP_NAME = "WORKMINE"
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 PAYMENT_MODE = os.getenv("WORKMINE_PAYMENT_MODE", "open").strip().lower()
 PAY_TO = os.getenv("PAY_TO", "").strip()
 X402_NETWORK = os.getenv("X402_NETWORK", "eip155:8453").strip()
@@ -177,6 +177,20 @@ def init_db() -> None:
             )
             """
         )
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS settlements (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts TEXT NOT NULL,
+                transaction_id TEXT NOT NULL UNIQUE,
+                payer TEXT,
+                network TEXT NOT NULL,
+                amount_atomic TEXT,
+                amount_usdc REAL,
+                phase TEXT
+            )
+            """
+        )
         con.commit()
 
 
@@ -195,6 +209,42 @@ def record_event(product: str, started: float) -> None:
             con.commit()
     except Exception:
         pass
+
+
+def record_settlement(ctx: Any) -> None:
+    result = ctx.result
+    if not getattr(result, "success", False):
+        return
+    tx = str(getattr(result, "transaction", "") or "")
+    if not tx:
+        return
+    raw_amount = getattr(result, "amount", None)
+    amount_usdc = None
+    try:
+        if raw_amount is not None:
+            amount_usdc = int(str(raw_amount)) / 1_000_000.0
+    except (TypeError, ValueError):
+        amount_usdc = None
+    payload = {
+        "event": "WORKMINE_SETTLEMENT",
+        "ts": utcnow(),
+        "transaction": tx,
+        "payer": getattr(result, "payer", None),
+        "network": str(getattr(result, "network", X402_NETWORK)),
+        "amount_atomic": str(raw_amount) if raw_amount is not None else None,
+        "amount_usdc": amount_usdc,
+        "phase": getattr(ctx, "phase", None),
+    }
+    print(json.dumps(payload, ensure_ascii=False), flush=True)
+    try:
+        with sqlite3.connect(DB_PATH) as con:
+            con.execute(
+                "INSERT OR IGNORE INTO settlements(ts, transaction_id, payer, network, amount_atomic, amount_usdc, phase) VALUES(?,?,?,?,?,?,?)",
+                (payload["ts"], tx, payload["payer"], payload["network"], payload["amount_atomic"], amount_usdc, payload["phase"]),
+            )
+            con.commit()
+    except Exception as exc:
+        print(json.dumps({"event": "WORKMINE_SETTLEMENT_DB_ERROR", "error": str(exc)}), flush=True)
 
 
 def summary_stats() -> dict[str, Any]:

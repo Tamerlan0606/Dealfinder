@@ -21,4 +21,4 @@ def test_sitemap():
 def test_redirect():
     r=client.get("/go?src=test", follow_redirects=False)
     assert r.status_code==302
-    assert "utm_campaign=test" in r.headers["location"]
+    assert "source=marketstart" in r.headers["location"]\n    assert "channel=test" in r.headers["location"]

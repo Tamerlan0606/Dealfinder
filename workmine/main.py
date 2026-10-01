@@ -289,6 +289,11 @@ if PAYMENT_MODE == "x402":
         raise RuntimeError(f"Unable to initialize x402 payment middleware: {exc}") from exc
 
 
+@app.get("/v1/ping")
+def paid_ping(nonce: str = "") -> dict[str, Any]:
+    return {"ok": True, "service": APP_NAME, "message": "paid pong", "nonce": nonce, "ts": utcnow()}
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
     return {

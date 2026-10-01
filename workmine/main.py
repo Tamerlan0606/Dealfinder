@@ -535,6 +535,18 @@ def discovery_manifest() -> dict[str, Any]:
             "description": meta["description"],
             "tags": meta["tags"],
         })
+    for name in ["hash", "base64_encode", "base64_decode", "url_encode", "url_decode"]:
+        meta = PRODUCTS[name]
+        items.append({
+            "name": name + "_get",
+            "resource": base + meta["path"],
+            "method": "GET",
+            "price_usd": meta["price"],
+            "network": X402_NETWORK,
+            "scheme": "exact",
+            "description": meta["description"],
+            "tags": meta["tags"] + ["bazaar"],
+        })
     return {"service": APP_NAME, "x402Version": 2, "payTo": PAY_TO, "items": items}
 
 
@@ -554,6 +566,12 @@ Catalog: {base}/catalog
 
 Paid endpoints:
 - GET /v1/ping — $0.001 — availability probe
+- GET|POST /v1/hash — $0.001 — hashing
+- GET|POST /v1/base64/encode — $0.001 — Base64 encode
+- GET|POST /v1/base64/decode — $0.001 — Base64 decode
+- GET|POST /v1/url/encode — $0.001 — URL encode
+- GET|POST /v1/url/decode — $0.001 — URL decode
+- POST /v1/hmac — $0.001 — HMAC signing
 - POST /v1/text/normalize — $0.001 — Unicode/whitespace cleanup
 - POST /v1/text/keywords — $0.002 — keyword extraction
 - POST /v1/json/repair — $0.003 — malformed JSON repair

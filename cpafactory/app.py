@@ -288,6 +288,19 @@ def go(offer_id: int, content_id: int = 0, source: str = "direct", channel: str 
         c.execute("update content set clicks=clicks+1 where id=%s", (content_id,)) if content_id else None
     return RedirectResponse(add_tracking(offer["tracking_url"], subid), status_code=302)
 
+@app.get("/go/admitad/{external_id}")
+def go_admitad(external_id: str, source: str = "marketstart_global", channel: str = "tiktok"):
+    safe_source=re.sub(r"[^a-zA-Z0-9_-]","",str(source))[:24] or "marketstart_global"
+    safe_channel=re.sub(r"[^a-zA-Z0-9_-]","",str(channel))[:24] or "tiktok"
+    with db() as c:
+        offer=c.execute("select * from offers where source='admitad' and external_id=%s and active=true",(str(external_id),)).fetchone()
+        if not offer or not offer["tracking_url"]:
+            raise HTTPException(404,"Admitad offer not found")
+        offer_id=int(offer["id"])
+        subid=f"cf_{offer_id}_0_{safe_source}_{safe_channel}"
+        c.execute("insert into click_events(offer_id,content_id,subid) values(%s,%s,%s)",(offer_id,None,subid))
+    return RedirectResponse(add_tracking(offer["tracking_url"],subid),status_code=302)
+
 @app.get("/r/{content_id}")
 def tracked_redirect(content_id:int, source:str="direct", channel:str="unknown"):
     with db() as c:

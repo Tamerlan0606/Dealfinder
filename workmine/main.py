@@ -14,7 +14,7 @@ from typing import Any
 
 from bs4 import BeautifulSoup
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from json_repair import repair_json
 from pydantic import BaseModel, Field
 from pypdf import PdfReader
@@ -292,6 +292,59 @@ if PAYMENT_MODE == "x402":
 @app.get("/v1/ping")
 def paid_ping(nonce: str = "") -> dict[str, Any]:
     return {"ok": True, "service": APP_NAME, "message": "paid pong", "nonce": nonce, "ts": utcnow()}
+
+
+@app.get("/x402/discovery.json")
+def discovery_manifest() -> dict[str, Any]:
+    base = PUBLIC_BASE_URL or ""
+    items = [
+        {
+            "name": "paid_ping",
+            "resource": base + "/v1/ping",
+            "method": "GET",
+            "price_usd": 0.001,
+            "network": X402_NETWORK,
+            "scheme": "exact",
+            "description": "Low-cost paid availability probe for autonomous agents.",
+        }
+    ]
+    for name, meta in PRODUCTS.items():
+        items.append({
+            "name": name,
+            "resource": base + meta["path"],
+            "method": "POST",
+            "price_usd": meta["price"],
+            "network": X402_NETWORK,
+            "scheme": "exact",
+            "description": meta["description"],
+            "tags": meta["tags"],
+        })
+    return {"service": APP_NAME, "x402Version": 2, "payTo": PAY_TO, "items": items}
+
+
+@app.get("/llms.txt", response_class=PlainTextResponse)
+def llms_txt() -> str:
+    base = PUBLIC_BASE_URL or ""
+    return f"""# WORKMINE
+> Pay-per-call x402 microservice API for autonomous agents.
+
+Base URL: {base}
+Protocol: x402 v2
+Network: Base Mainnet (eip155:8453)
+Settlement asset: USDC
+Discovery manifest: {base}/x402/discovery.json
+OpenAPI: {base}/openapi.json
+Catalog: {base}/catalog
+
+Paid endpoints:
+- GET /v1/ping — $0.001 — availability probe
+- POST /v1/text/normalize — $0.001 — Unicode/whitespace cleanup
+- POST /v1/text/keywords — $0.002 — keyword extraction
+- POST /v1/json/repair — $0.003 — malformed JSON repair
+- POST /v1/text/redact — $0.002 — common identifier redaction
+- POST /v1/html/to-text — $0.003 — HTML text/link extraction
+- POST /v1/pdf/extract-text — $0.010 — text-layer PDF extraction
+"""
 
 
 @app.get("/health")

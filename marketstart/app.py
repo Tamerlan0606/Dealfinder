@@ -1,7 +1,8 @@
-import os, html, urllib.parse
+import os, html, urllib.parse, io
 from datetime import datetime, timezone
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, PlainTextResponse, Response
+from PIL import Image, ImageDraw, ImageFont
 
 app = FastAPI(title="MarketStart AI", docs_url=None, redoc_url=None)
 SITE_URL = os.getenv("SITE_URL", "https://marketstart-production.onrender.com").rstrip("/")
@@ -136,3 +137,88 @@ def rss():
         items.append(f"<item><title>{html.escape(t)}</title><link>{link}</link><description>Практический разбор для продавца</description></item>")
     xml='<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>MarketStart AI</title><link>'+SITE_URL+'</link><description>База знаний продавца</description>'+''.join(items)+'</channel></rss>'
     return Response(xml,media_type="application/rss+xml")
+
+
+GLOBAL_POSTS = {
+    "margin": {
+        "hook": "Revenue is not profit.",
+        "body": "Before you launch a product, model fees, fulfillment, returns, ads and taxes. A product that looks profitable at the selling price can lose money after variable costs.",
+        "cta": "Use the free marketplace launch framework at MarketStart AI."
+    },
+    "inventory": {
+        "hook": "Your first order should be a test, not a bet.",
+        "body": "Start with the smallest inventory batch that can validate demand. Measure conversion, returns and contribution margin before you scale stock.",
+        "cta": "Build the numbers before you buy inventory."
+    },
+    "launch": {
+        "hook": "A marketplace launch is a sequence, not a guess.",
+        "body": "Validate demand, calculate unit economics, prepare the listing, choose fulfillment, launch a small test and scale only after the data confirms the thesis.",
+        "cta": "Follow the launch framework at MarketStart AI."
+    }
+}
+
+@app.get("/global", response_class=HTMLResponse)
+def global_home():
+    cards = "".join(
+        f'<div class="card"><b>{html.escape(v["hook"])}</b><br><small>{html.escape(v["body"])}</small></div>'
+        for v in GLOBAL_POSTS.values()
+    )
+    body = f"""<p class="muted">Marketplace launch framework</p>
+<h1>Build the economics before you scale the product</h1>
+<p class="lead">A practical framework for international marketplace sellers: demand validation, unit economics, inventory testing, listing conversion and controlled scaling.</p>
+<div class="grid">{cards}</div>
+<h2>Operating rule</h2><p>Test small, measure contribution margin, and scale only what the data validates.</p>
+<p><small>This page is educational. Marketplace fees, tax rules and program availability vary by country and platform.</small></p>"""
+    return page("Marketplace Launch Framework", body, "/global")
+
+@app.get("/api/social/tiktok")
+def tiktok_content():
+    return {
+        "audience": "international",
+        "language": "en",
+        "landing": SITE_URL + "/global",
+        "posts": [
+            {
+                "slug": slug,
+                "text": f'{data["hook"]}\n\n{data["body"]}\n\n{data["cta"]}\n\n#ecommerce #marketplace #onlinebusiness #sellertips',
+                "media": SITE_URL + f"/media/tiktok/{slug}.png"
+            }
+            for slug, data in GLOBAL_POSTS.items()
+        ]
+    }
+
+@app.get("/media/tiktok/{slug}.png")
+def tiktok_media(slug: str):
+    data = GLOBAL_POSTS.get(slug)
+    if not data:
+        return Response(status_code=404)
+    img = Image.new("RGB", (1080, 1350), (7, 17, 31))
+    draw = ImageDraw.Draw(img)
+    try:
+        bold = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 72)
+        regular = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 42)
+        small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 32)
+    except Exception:
+        bold = regular = small = ImageFont.load_default()
+    draw.text((72, 70), "MARKETSTART AI", font=small, fill=(103, 232, 249))
+    def wrap(text, font, max_width):
+        words=text.split(); lines=[]; line=""
+        for word in words:
+            test=(line+" "+word).strip()
+            if draw.textbbox((0,0), test, font=font)[2] <= max_width:
+                line=test
+            else:
+                if line: lines.append(line)
+                line=word
+        if line: lines.append(line)
+        return lines
+    y=230
+    for line in wrap(data["hook"], bold, 930):
+        draw.text((72,y), line, font=bold, fill=(238,245,255)); y += 92
+    y += 55
+    for line in wrap(data["body"], regular, 930):
+        draw.text((72,y), line, font=regular, fill=(199,215,233)); y += 58
+    draw.rounded_rectangle((72,1120,1008,1260), radius=28, fill=(34,197,94))
+    draw.text((110,1165), "marketstart-production.onrender.com/global", font=small, fill=(4,18,10))
+    out=io.BytesIO(); img.save(out, format="PNG", optimize=True); out.seek(0)
+    return Response(out.getvalue(), media_type="image/png", headers={"Cache-Control":"public, max-age=86400"})

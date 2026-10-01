@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: workmine-api
+    runtime: python
+    plan: starter
+    branch: workmine-mvp
+    buildCommand: pip install -r workmine/requirements.txt
+    startCommand: uvicorn workmine.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: WORKMINE_PAYMENT_MODE
+        value: open
+      - key: X402_NETWORK
+        value: eip155:8453
+      - key: X402_FACILITATOR_URL
+        value: https://x402.org/facilitator
+      - key: WORKMINE_DB_PATH
+        value: /tmp/workmine.db

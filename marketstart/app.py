@@ -109,9 +109,8 @@ def guide(slug: str, fmt: str):
 @app.get("/go")
 def go(request: Request, src: str="site"):
     q = dict(request.query_params)
-    q["utm_source"] = q.get("utm_source","marketstart")
-    q["utm_medium"] = q.get("utm_medium","content")
-    q["utm_campaign"] = q.get("utm_campaign",src)
+    q["source"] = q.get("source","marketstart")
+    q["channel"] = q.get("channel",src)
     sep = "&" if "?" in CPA_OUT else "?"
     return RedirectResponse(CPA_OUT + sep + urllib.parse.urlencode(q), status_code=302)
 

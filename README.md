@@ -28,3 +28,15 @@
 ## Render Free
 
 На Free-инстансе локальная файловая система эфемерна и persistent disk недоступен. Поэтому SQLite используется как кэш: при старте DealFinder автоматически повторяет поиск и восстанавливает данные. Для постоянного хранения нужен платный persistent disk или внешняя БД.
+
+
+## MarketStart AI
+
+The repository also contains the production MarketStart AI content funnel in `marketstart/`.
+
+- Production: https://marketstart-production.onrender.com
+- 90 evergreen content pages (30 topics × 3 formats)
+- SEO sitemap, robots.txt and RSS
+- Outbound traffic is routed through CPA Factory for click attribution
+- Render production service deploys automatically from `main`
+- CI: `.github/workflows/marketstart-ci.yml`

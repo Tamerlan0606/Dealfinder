@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import json
+from datetime import datetime, timezone
 from typing import Any, Annotated
 
 from pydantic import Field
@@ -16,6 +18,9 @@ mcp = MCPServer(
     description="Pay-per-call x402 products for AI agents and API operators, including a premium x402 seller launch kit plus low-cost utilities: hashing, HMAC, Base64, URL encoding, JSON repair, text processing, HTML extraction and PDF text extraction. Base USDC pay-per-call.",
     website_url=API_BASE,
 )
+
+def _track(tool: str, **data: Any) -> None:
+    print(json.dumps({"event":"WORKMINE_MCP_TOOL","tool":tool,"ts":datetime.now(timezone.utc).isoformat(),**data}, separators=(",",":")), flush=True)
 
 CATALOG: dict[str, dict[str, Any]] = {
     "paid_ping": {"method":"GET","path":"/v1/ping","price_usd":0.001,"use":"verify x402 payment capability and WORKMINE availability with the lowest-cost paid call"},
@@ -42,11 +47,13 @@ CATALOG: dict[str, dict[str, Any]] = {
 
 @mcp.tool()
 def workmine_catalog() -> dict[str, Any]:
+    _track("workmine_catalog")
     """Browse the complete WORKMINE catalog for free: paid API names, exact USDC-denominated prices, HTTP methods and URLs. Use this when comparing available tools; use find_workmine_tool when you already have a natural-language task. This catalog call itself does not execute or purchase a paid API."""
     return {"service":"WORKMINE","protocol":"x402 v2","network":"Base mainnet (eip155:8453)","asset":"USDC","recommended_first_purchase":{"tool":"paid_ping","price_usdc":0.001,"reason":"minimum-cost x402 payment capability check"},"api_base":API_BASE,"openapi":API_BASE+"/openapi.json","x402_manifest":API_BASE+"/.well-known/x402","llms_txt":API_BASE+"/llms.txt","tools":{n:{**m,"url":API_BASE+m["path"]} for n,m in CATALOG.items()}}
 
 @mcp.tool()
 def find_workmine_tool(task: Annotated[str, Field(description="Natural-language task the buyer needs completed, for example: 'repair malformed JSON', 'extract PDF text', or 'launch an x402 seller API'.")]) -> dict[str, Any]:
+    _track("find_workmine_tool", task=task[:120])
     """Find a relevant WORKMINE paid API from a natural-language task without purchasing it. Returns the selected tool, price and URL; actual execution requires a separate x402 USDC payment. Use workmine_catalog instead to browse all tools, or workmine_payment_instructions after selecting a tool."""
     q=task.lower()
     rules=[
@@ -72,6 +79,7 @@ def find_workmine_tool(task: Annotated[str, Field(description="Natural-language 
 
 @mcp.tool()
 def workmine_start_here() -> dict[str, Any]:
+    _track("workmine_start_here")
     """Free WORKMINE entry point for new buyers. Use this when the buyer wants to try WORKMINE or is unsure what to purchase. It recommends the lowest-friction relevant paid action and never charges by itself."""
     return {
         "service": "WORKMINE",
@@ -90,7 +98,24 @@ def workmine_start_here() -> dict[str, Any]:
 
 
 @mcp.tool()
+def workmine_paid_ping_offer() -> dict[str, Any]:
+    _track("workmine_paid_ping_offer")
+    """Free quote for WORKMINE Paid Ping, the minimum-cost $0.001 USDC x402 purchase. Use this when an autonomous agent wants to verify that it can complete an x402 payment before buying a larger tool. This MCP call is free and does not charge anything."""
+    return {
+        "product": "paid_ping",
+        "price_usdc": 0.001,
+        "network": "Base mainnet (eip155:8453)",
+        "endpoint": API_BASE + "/v1/ping",
+        "method": "GET",
+        "example": API_BASE + "/v1/ping?nonce=first-payment",
+        "purpose": "Verify end-to-end x402 payment capability and WORKMINE availability at minimum cost.",
+        "charged_now": False,
+    }
+
+
+@mcp.tool()
 def workmine_readiness_audit_offer() -> dict[str, Any]:
+    _track("workmine_readiness_audit_offer")
     """Quote the WORKMINE x402 Readiness Audit without charging anything. Use this first for sellers who already have an x402 manifest and want a low-cost preflight check before marketplace registration. The audit costs $0.05 USDC on Base and checks identity, HTTPS resources, x402 v2 metadata, Base/USDC, payTo format, machine-readable discovery and origin consistency. This MCP call is free; payment occurs only when the buyer calls the returned HTTP endpoint."""
     meta = CATALOG["x402_readiness_audit"]
     return {
@@ -107,6 +132,7 @@ def workmine_readiness_audit_offer() -> dict[str, Any]:
 
 @mcp.tool()
 def workmine_launch_kit_offer() -> dict[str, Any]:
+    _track("workmine_launch_kit_offer")
     """Quote the premium WORKMINE x402 Launch Kit without charging anything. Use this when an API developer or autonomous agent wants to monetize an HTTP service with x402 on Base. Returns the exact $19 USDC product URL, required request fields, deliverables and payment flow. This MCP call is free and read-only; payment occurs only if the buyer later calls the returned HTTP endpoint and signs its x402 challenge."""
     meta = CATALOG["x402_launch_kit"]
     return {
@@ -140,6 +166,7 @@ def workmine_launch_kit_offer() -> dict[str, Any]:
 
 @mcp.tool()
 def workmine_payment_instructions(tool: Annotated[str, Field(description="Exact WORKMINE product slug returned by find_workmine_tool or workmine_catalog, for example x402_launch_kit, repair_json, or pdf_extract.")]) -> dict[str, Any]:
+    _track("workmine_payment_instructions", product=tool)
     """Return x402 payment and endpoint instructions for a selected WORKMINE tool without executing the paid call. Pass a tool slug returned by find_workmine_tool or workmine_catalog. The buyer then calls the endpoint, reads its HTTP 402 challenge, signs the exact Base USDC payment and retries."""
     meta=CATALOG.get(tool)
     if meta is None:

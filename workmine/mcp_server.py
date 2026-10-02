@@ -157,7 +157,7 @@ def workmine_start_here() -> dict[str, Any]:
 
 
 @mcp.tool()
-def workmine_paid_ping(nonce: Annotated[str, Field(default="", max_length=120, description="Optional caller nonce echoed after successful payment.")], ctx: Context) -> CallToolResult:
+def workmine_paid_ping(ctx: Context, nonce: Annotated[str, Field(max_length=120, description="Optional caller nonce echoed after successful payment.")] = "") -> CallToolResult:
     """Execute WORKMINE's native MCP x402 payment test for $0.001 USDC on Base. Call this paid tool when the client supports the x402 MCP transport. The first unpaid call returns PaymentRequired inside the MCP tool result; retry with _meta['x402/payment']. On successful verification and settlement, the tool returns paid=true plus the settlement receipt in MCP response metadata."""
     _track("workmine_paid_ping", nonce=nonce[:120])
     if PAID_PING_HANDLER is None:

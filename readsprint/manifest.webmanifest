@@ -1,9 +1,11 @@
 {
-  "name": "ReadSprint",
+  "name": "ReadSprint — фокус-читалка",
   "short_name": "ReadSprint",
   "start_url": "./",
+  "scope": "./",
   "display": "standalone",
-  "background_color": "#0b1020",
-  "theme_color": "#0b1020",
-  "description": "Фокус-читалка с RSVP режимом."
+  "background_color": "#07101d",
+  "theme_color": "#07101d",
+  "description": "TXT, PDF и DOCX в RSVP-режиме без отвлечений.",
+  "lang": "ru"
 }

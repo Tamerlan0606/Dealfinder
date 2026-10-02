@@ -183,13 +183,13 @@ def tiktok_content():
             {
                 "slug": slug,
                 "text": f'{data["hook"]}\n\n{data["body"]}\n\n{data["cta"]}\n\n#ecommerce #marketplace #onlinebusiness #sellertips',
-                "media": SITE_URL + f"/media/tiktok/{slug}.png"
+                "media": SITE_URL + f"/media/tiktok/{slug}.jpg"
             }
             for slug, data in GLOBAL_POSTS.items()
         ]
     }
 
-@app.get("/media/tiktok/{slug}.png")
+@app.get("/media/tiktok/{slug}.jpg")
 def tiktok_media(slug: str):
     data = GLOBAL_POSTS.get(slug)
     if not data:
@@ -222,5 +222,5 @@ def tiktok_media(slug: str):
         draw.text((72,y), line, font=regular, fill=(199,215,233)); y += 58
     draw.rounded_rectangle((72,1120,1008,1260), radius=28, fill=(34,197,94))
     draw.text((110,1165), "marketstart-production.onrender.com/global", font=small, fill=(4,18,10))
-    out=io.BytesIO(); img.save(out, format="PNG", optimize=True); out.seek(0)
-    return Response(out.getvalue(), media_type="image/png", headers={"Cache-Control":"public, max-age=86400"})
+    out=io.BytesIO(); img.save(out, format="JPEG", quality=90, optimize=True); out.seek(0)
+    return Response(out.getvalue(), media_type="image/jpeg", headers={"Cache-Control":"public, max-age=86400"})

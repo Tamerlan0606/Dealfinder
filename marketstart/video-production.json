@@ -1,0 +1,89 @@
+{
+  "status": "blocked_pending_video_provider_connection",
+  "provider_candidate": "HeyGen",
+  "provider_connection_verified": false,
+  "spending_authorized": false,
+  "requirements": {
+    "language": "en",
+    "orientation": "9:16",
+    "minimum_measured_duration_seconds": 61,
+    "target_duration_seconds": 70,
+    "spoken_narration": true,
+    "moving_presenter": true,
+    "animated_or_filmed_story_scenes": true,
+    "subtitles": "Supporting speech only; never the primary visual",
+    "forbidden_fallbacks": ["text cards", "silent slideshow", "looped filler to reach 61 seconds"],
+    "safety": "All ages; no adult content, cruelty, humiliation, impersonation or dangerous challenges",
+    "disclosure": "AI-assisted fictional entertainment"
+  },
+  "pilot": {
+    "title": "My fridge became my life coach",
+    "genre": "fictional comedy",
+    "voice": "Warm, expressive English voice; do not imitate any real person",
+    "presenter": "Original clearly fictional adult cartoon presenter in casual clothes",
+    "scenes": [
+      {
+        "target_seconds": 4,
+        "speech": "My fridge started talking. Its first sentence was: we need to discuss your midnight cheese.",
+        "visual": "Open immediately on an animated fridge opening its door and a surprised presenter holding cheese. Cut to a moving close-up."
+      },
+      {
+        "target_seconds": 8,
+        "speech": "I asked for a snack. It asked for my five-year plan. I said, probably still standing here, asking for a snack.",
+        "visual": "Presenter reaches for a snack; fridge rolls out a comically long calendar. Presenter gestures toward the snack."
+      },
+      {
+        "target_seconds": 8,
+        "speech": "Then it organized a meeting. The milk chaired it. The carrots took notes. The leftover pizza joined remotely from the freezer.",
+        "visual": "Cut to a miniature animated meeting inside the fridge: milk carton at the head of the table, carrots writing, pizza waving on a screen."
+      },
+      {
+        "target_seconds": 8,
+        "speech": "Their main concern? I open the door, stare at everything, close it, and return thirty seconds later expecting new food.",
+        "visual": "Match cuts of the presenter repeatedly opening and closing the door; the same food reacts with increasingly puzzled faces."
+      },
+      {
+        "target_seconds": 7,
+        "speech": "Honestly, fair. So I tried to impress them. I bought a salad. The pizza immediately requested a transfer to another kitchen.",
+        "visual": "A salad arrives like a new employee. Pizza wheels a small suitcase toward the door; presenter reacts."
+      },
+      {
+        "target_seconds": 8,
+        "speech": "By evening, the fridge had promoted itself to life coach. It suggested balance. I put a cookie in each hand. Perfect balance.",
+        "visual": "Fridge opens a coaching session; presenter physically balances two cookies on outstretched hands, then smiles at camera."
+      },
+      {
+        "target_seconds": 8,
+        "speech": "Then came the twist. The fridge was not judging me. It was lonely. Nobody ever asks an appliance how its day went.",
+        "visual": "Camera pushes in on the fridge's softer expression. Presenter sets down the cookies and sits beside it."
+      },
+      {
+        "target_seconds": 8,
+        "speech": "So I asked. It said, pretty cool. I laughed. It repeated the joke six times. Now I understand why the toaster moved out.",
+        "visual": "Fridge and presenter laugh; cut to a toaster quietly leaving with a suitcase. Keep the joke friendly."
+      },
+      {
+        "target_seconds": 6,
+        "speech": "Tomorrow, the microwave wants a podcast. Which appliance would be the funniest roommate?",
+        "visual": "Microwave pulls a microphone into view; presenter turns toward it in surprise. End on this visual joke without a long end card."
+      }
+    ],
+    "caption": "My fridge held a meeting about my snack habits. Which appliance would be the funniest roommate? AI-assisted fictional entertainment. #comedy #animation #funny",
+    "production_note": "Timing is a target, not a verified runtime. Measure the exported file. Adjust natural speech pacing and substantive action to reach at least 61 seconds; do not pad with silence."
+  },
+  "release_gate": [
+    "Verify the provider is connected and inspect its capabilities, available free quota and costs before generation. Do not purchase credits or subscriptions.",
+    "Export an actual moving video; reject a presenter pasted over static full-screen text cards.",
+    "Probe actual duration >=61 seconds, vertical video dimensions, playable video and audio streams.",
+    "Listen to the narration and inspect the beginning, middle, ending and every scene transition; ensure no truncated speech or excessive silence.",
+    "Check that visual actions illustrate the spoken jokes and subtitles are readable and secondary.",
+    "Verify required native AI disclosure is supported before publishing a realistic synthetic presenter. Caption disclosure alone must not be assumed sufficient.",
+    "Upload the local absolute MP4 path to Metricool with info.media=[]; retain slot and UUID when replacing a draft.",
+    "Reread the queue to confirm correct media, draft=false and autoPublish=true. Pending does not mean published."
+  ],
+  "legacy_queue": {
+    "action_completed": "Five BYTE text-card posts were changed to draft=true and autoPublish=false on 2026-10-02",
+    "replacement_uuids": ["-5702469888849785597", "7928703110183928968", "771024567146596399", "-2236172989798857485", "-8808295605424600253"],
+    "note": "Re-read current IDs before any update. Do not alter other projects' posts."
+  }
+}

@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 from pypdf import PdfReader
 
 APP_NAME = "WORKMINE"
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 PAYMENT_MODE = os.getenv("WORKMINE_PAYMENT_MODE", "open").strip().lower()
 PAY_TO = os.getenv("PAY_TO", "").strip()
 X402_NETWORK = os.getenv("X402_NETWORK", "eip155:8453").strip()
@@ -36,6 +36,11 @@ MAX_TEXT_CHARS = int(os.getenv("MAX_TEXT_CHARS", "200000"))
 MAX_PDF_BYTES = int(os.getenv("MAX_PDF_BYTES", str(8 * 1024 * 1024)))
 
 PRODUCTS: dict[str, dict[str, Any]] = {
+    "x402_launch_kit": {
+        "path": "/v1/x402/launch-kit", "price": 19.0, "estimated_cost": 0.001,
+        "description": "Generate a deploy-ready x402 seller launch kit: manifest, discovery metadata, implementation scaffold and marketplace registration checklist.",
+        "tags": ["x402", "seller", "launch", "bazaar", "monetization", "developer"],
+    },
     "normalize": {
         "path": "/v1/text/normalize",
         "price": 0.001,
@@ -127,6 +132,15 @@ STOPWORDS = {
     "but", "not", "all", "can", "into", "about", "как", "что", "это", "для", "или", "его", "она", "они", "так",
     "при", "без", "над", "под", "если", "уже", "еще", "ещё", "где", "чтобы", "который", "которые", "когда", "быть",
 }
+
+class X402LaunchKitInput(BaseModel):
+    service_name: str = Field(min_length=2, max_length=80)
+    base_url: str = Field(min_length=8, max_length=300)
+    pay_to: str = Field(min_length=10, max_length=200)
+    stack: str = Field(default="fastapi", pattern="^(fastapi|express)$")
+    product_path: str = Field(default="/v1/tool", min_length=2, max_length=200)
+    price_usd: float = Field(default=0.01, gt=0, le=10000)
+    description: str = Field(default="Paid API tool for autonomous agents.", min_length=5, max_length=500)
 
 class TextInput(BaseModel):
     text: str = Field(min_length=1, max_length=MAX_TEXT_CHARS)
@@ -357,6 +371,11 @@ if PAYMENT_MODE == "x402":
             )
 
         post_examples: dict[str, tuple[dict[str, Any], dict[str, Any], Any]] = {
+            "x402_launch_kit": (
+                {"service_name": "My Agent API", "base_url": "https://api.example.com", "pay_to": "0x0000000000000000000000000000000000000000", "stack": "fastapi", "product_path": "/v1/tool", "price_usd": 0.01, "description": "Useful paid agent tool."},
+                {"type": "object", "properties": {"service_name": {"type": "string"}, "base_url": {"type": "string"}, "pay_to": {"type": "string"}, "stack": {"type": "string", "enum": ["fastapi", "express"]}, "product_path": {"type": "string"}, "price_usd": {"type": "number"}, "description": {"type": "string"}}, "required": ["service_name", "base_url", "pay_to"]},
+                {"service": "My Agent API", "stack": "fastapi", "files": {"manifest.json": "...", "implementation.txt": "..."}, "registration": ["Deploy", "Verify 402", "Register origin"]},
+            ),
             "text_normalize": (
                 {"text": "  Hello   world  "},
                 {"type": "object", "properties": {"text": {"type": "string", "description": "Text to normalize"}}, "required": ["text"]},
@@ -557,7 +576,7 @@ def well_known_x402() -> dict[str, Any]:
                 "currency": "USDC",
                 "networks": [X402_NETWORK],
                 "primaryNetwork": X402_NETWORK,
-                "priceRange": "$0.001-$0.010",
+                "priceRange": "$0.001-$19.00",
                 "payTo": PAY_TO,
                 "nonCustodial": True,
             }
@@ -667,7 +686,7 @@ Paid endpoints:
 - POST /v1/json/repair — $0.003 — malformed JSON repair
 - POST /v1/text/redact — $0.002 — common identifier redaction
 - POST /v1/html/to-text — $0.003 — HTML text/link extraction
-- POST /v1/pdf/extract-text — $0.010 — text-layer PDF extraction
+- POST /v1/pdf/extract-text — $0.010 — text-layer PDF extraction\n- POST /v1/x402/launch-kit — $19.00 — deploy-ready x402 seller launch kit
 """
 
 
@@ -734,6 +753,46 @@ a{{color:#111}} </style></head><body>
 <table><thead><tr><th>Product</th><th>Endpoint</th><th>Price/call</th><th>Purpose</th></tr></thead><tbody>{rows}</tbody></table>
 </body></html>"""
 
+
+
+@app.post("/v1/x402/launch-kit")
+def api_x402_launch_kit(payload: X402LaunchKitInput) -> dict[str, Any]:
+    started = time.perf_counter()
+    base_url = payload.base_url.rstrip("/")
+    product_path = "/" + payload.product_path.lstrip("/")
+    manifest = {
+        "spec": "agent402-service-manifest/1", "version": 1, "name": payload.service_name,
+        "summary": payload.description, "homepage": base_url, "resources": [base_url + product_path],
+        "ecosystem": {"primaryChain": "Base", "primaryChainId": 8453, "currency": "USDC", "protocol": "x402"},
+        "payment": {"x402": {"version": 2, "currency": "USDC", "networks": ["eip155:8453"], "primaryNetwork": "eip155:8453", "payTo": payload.pay_to, "nonCustodial": True}},
+        "machineReadable": {"openapi": base_url + "/openapi.json", "llmsTxt": base_url + "/llms.txt"},
+    }
+    if payload.stack == "fastapi":
+        implementation = f"""# FastAPI x402 scaffold
+# pip install fastapi uvicorn x402
+PAY_TO = "{payload.pay_to}"
+NETWORK = "eip155:8453"
+PRICE = "${payload.price_usd:g}"
+# Protect POST {product_path} with x402 middleware; publish /.well-known/x402 and verify unpaid requests return HTTP 402.
+"""
+    else:
+        implementation = f"""// Express x402 scaffold
+// npm install express @x402/core @x402/express
+const PAY_TO = "{payload.pay_to}";
+const NETWORK = "eip155:8453";
+const PRICE = "${payload.price_usd:g}";
+// Protect POST {product_path}; publish /.well-known/x402 and verify unpaid requests return HTTP 402.
+"""
+    discovery = {"name": payload.service_name, "resource": base_url + product_path, "method": "POST", "price_usd": payload.price_usd, "network": "eip155:8453", "scheme": "exact", "description": payload.description}
+    registration = [
+        "Deploy the HTTPS origin and expose /.well-known/x402 plus /openapi.json.",
+        f"Verify an unpaid POST {product_path} returns a valid x402 HTTP 402 challenge.",
+        "Register the origin with Agent402 POST /api/index/register.",
+        "Keep the origin healthy so hourly crawlers continue routing buyers.",
+        "Count revenue only from confirmed settlement receipts, never from 402 probes.",
+    ]
+    record_event("x402_launch_kit", started)
+    return {"service": payload.service_name, "stack": payload.stack, "files": {".well-known/x402.json": json.dumps(manifest, ensure_ascii=False, indent=2), "discovery.json": json.dumps(discovery, ensure_ascii=False, indent=2), "implementation.txt": implementation}, "registration": registration, "economics": {"seller_price_usd": payload.price_usd, "seller_pay_to": payload.pay_to, "network": "Base", "asset": "USDC"}}
 
 @app.post("/v1/text/normalize")
 def api_normalize(payload: NormalizeInput) -> dict[str, Any]:

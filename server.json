@@ -1,0 +1,19 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.Tamerlan0606/workmine",
+  "title": "WORKMINE",
+  "description": "Remote MCP gateway for discovering low-cost and premium x402 pay-per-call APIs settled in USDC on Base.",
+  "version": "0.3.0",
+  "repository": {
+    "url": "https://github.com/Tamerlan0606/Dealfinder",
+    "source": "github",
+    "subfolder": "workmine"
+  },
+  "websiteUrl": "https://workmine-api.onrender.com",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://workmine-mcp.onrender.com/mcp"
+    }
+  ]
+}

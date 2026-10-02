@@ -18,6 +18,12 @@ mcp = MCPServer(
 )
 
 CATALOG: dict[str, dict[str, Any]] = {
+    "x402_readiness_audit": {
+        "method": "POST",
+        "path": "/v1/x402/readiness-audit",
+        "price_usd": 0.05,
+        "description": "Audit an x402 seller manifest for discoverability and payment readiness; returns a score, issues and concrete fixes.",
+    },
     "x402_launch_kit": {"method":"POST","path":"/v1/x402/launch-kit","price_usd":19.0,"use":"generate a deploy-ready x402 seller launch kit with manifest, discovery metadata, implementation scaffold and marketplace registration checklist"},
     "hash": {"method":"GET or POST","path":"/v1/hash","price_usd":0.001,"use":"generate SHA-256, SHA-512, SHA-1 or MD5 checksums and digests"},
     "hmac": {"method":"POST","path":"/v1/hmac","price_usd":0.001,"use":"generate HMAC SHA-256 or SHA-512 signatures"},
@@ -60,6 +66,22 @@ def find_workmine_tool(task: Annotated[str, Field(description="Natural-language 
             meta=CATALOG[name]
             return {"match":name,**meta,"url":API_BASE+meta["path"],"payment":"x402 Base USDC","reason":"Lowest-priced WORKMINE tool matching the requested task."}
     return {"match":None,"message":"No strong semantic match. Do not spend money on an irrelevant tool.","catalog":API_BASE+"/catalog"}
+
+@mcp.tool()
+def workmine_readiness_audit_offer() -> dict[str, Any]:
+    """Quote the WORKMINE x402 Readiness Audit without charging anything. Use this first for sellers who already have an x402 manifest and want a low-cost preflight check before marketplace registration. The audit costs $0.05 USDC on Base and checks identity, HTTPS resources, x402 v2 metadata, Base/USDC, payTo format, machine-readable discovery and origin consistency. This MCP call is free; payment occurs only when the buyer calls the returned HTTP endpoint."""
+    meta = CATALOG["x402_readiness_audit"]
+    return {
+        "product": "x402_readiness_audit",
+        "price_usdc": 0.05,
+        "network": "Base mainnet (eip155:8453)",
+        "endpoint": API_BASE + meta["path"],
+        "method": "POST",
+        "input": {"manifest": "object: seller's /.well-known/x402 JSON", "expected_origin": "optional public HTTPS origin"},
+        "output": ["0-100 readiness score", "ready/needs_work/not_ready grade", "concrete issues", "concrete fixes", "Launch Kit upgrade path"],
+        "charged_now": False,
+    }
+
 
 @mcp.tool()
 def workmine_launch_kit_offer() -> dict[str, Any]:

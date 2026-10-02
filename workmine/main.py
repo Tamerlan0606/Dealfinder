@@ -31,6 +31,7 @@ PAY_TO = os.getenv("PAY_TO", "").strip()
 X402_NETWORK = os.getenv("X402_NETWORK", "eip155:8453").strip()
 X402_FACILITATOR_URL = os.getenv("X402_FACILITATOR_URL", "https://x402.org/facilitator").strip()
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
+AGENT402_REGISTER_ON_STARTUP = os.getenv("AGENT402_REGISTER_ON_STARTUP", "0").strip().lower() in {"1", "true", "yes"}
 DB_PATH = os.getenv("WORKMINE_DB_PATH", "/tmp/workmine.db")
 MAX_TEXT_CHARS = int(os.getenv("MAX_TEXT_CHARS", "200000"))
 MAX_PDF_BYTES = int(os.getenv("MAX_PDF_BYTES", str(8 * 1024 * 1024)))
@@ -541,7 +542,9 @@ def api_url_decode_get(text: str) -> dict[str, Any]:
 
 @app.on_event("startup")
 def register_agent_marketplaces() -> None:
-    if not PUBLIC_BASE_URL:
+    # Agent402 re-crawls already-listed origins automatically. Re-registering on every
+    # Render restart causes 429/backoff and can temporarily reduce discoverability.
+    if not PUBLIC_BASE_URL or not AGENT402_REGISTER_ON_STARTUP:
         return
     payload = json.dumps({"origin": PUBLIC_BASE_URL}).encode("utf-8")
     req = urllib.request.Request(

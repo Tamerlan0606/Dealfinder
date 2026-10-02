@@ -43,7 +43,8 @@ if MCP_PAY_TO:
     try:
         from x402.http import FacilitatorConfig, HTTPFacilitatorClientSync
         from x402.mechanisms.evm.exact import ExactEvmServerScheme
-        from x402.mcp import MCPToolResult, ResourceInfo, SyncPaymentWrapperConfig, create_payment_wrapper_sync, wrap_fastmcp_tool_sync
+        from x402.mcp import MCPToolResult, ResourceInfo, SyncPaymentWrapperConfig, create_payment_wrapper_sync
+        from x402.mcp.server_sync import wrap_fastmcp_tool_sync
         from x402.schemas import ResourceConfig
         from x402.server import x402ResourceServerSync
 

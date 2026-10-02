@@ -49,7 +49,7 @@ if MCP_PAY_TO:
 
         _facilitator = HTTPFacilitatorClientSync(FacilitatorConfig(url=os.getenv("X402_FACILITATOR_URL", "https://x402.org/facilitator")))
         _resource_server = x402ResourceServerSync(_facilitator)
-        _resource_server.register("eip155:*", ExactEvmServerScheme())
+        _resource_server.register("eip155:8453", ExactEvmServerScheme())
         _resource_server.initialize()
         _accepts = _resource_server.build_payment_requirements(
             ResourceConfig(

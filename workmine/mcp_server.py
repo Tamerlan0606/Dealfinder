@@ -43,13 +43,13 @@ if MCP_PAY_TO:
     try:
         from x402.http import FacilitatorConfig, HTTPFacilitatorClientSync
         from x402.mechanisms.evm.exact import ExactEvmServerScheme
-        from x402.mcp import MCPToolResult, ResourceInfo, SyncPaymentWrapperConfig, create_payment_wrapper_sync
+        from x402.mcp import MCPToolResult, ResourceInfo, SyncPaymentWrapperConfig, create_payment_wrapper_sync, wrap_fastmcp_tool_sync
         from x402.schemas import ResourceConfig
         from x402.server import x402ResourceServerSync
 
         _facilitator = HTTPFacilitatorClientSync(FacilitatorConfig(url=os.getenv("X402_FACILITATOR_URL", "https://x402.org/facilitator")))
         _resource_server = x402ResourceServerSync(_facilitator)
-        _resource_server.register("eip155:8453", ExactEvmServerScheme())
+        _resource_server.register("eip155:*", ExactEvmServerScheme())
         _resource_server.initialize()
         _accepts = _resource_server.build_payment_requirements(
             ResourceConfig(
@@ -71,10 +71,12 @@ if MCP_PAY_TO:
                 ),
             ),
         )
-        PAID_PING_HANDLER = _paid_ping(
+        PAID_PING_HANDLER = wrap_fastmcp_tool_sync(
+            _paid_ping,
             lambda args, _ctx: MCPToolResult(
                 content=[{"type":"text","text":json.dumps({"ok":True,"service":"WORKMINE","nonce":args.get("nonce",""),"paid":True})}]
-            )
+            ),
+            tool_name="workmine_paid_ping",
         )
         print(json.dumps({"event":"WORKMINE_MCP_PAYMENT_SETUP","ok":True,"tool":"workmine_paid_ping","price_usdc":0.001}, separators=(",",":")), flush=True)
     except Exception as exc:
@@ -158,36 +160,17 @@ def workmine_start_here() -> dict[str, Any]:
 
 @mcp.tool()
 def workmine_paid_ping(ctx: Context, nonce: Annotated[str, Field(max_length=120, description="Optional caller nonce echoed after successful payment.")] = "") -> CallToolResult:
-    """Execute WORKMINE's native MCP x402 payment test for $0.001 USDC on Base. Call this paid tool when the client supports the x402 MCP transport. The first unpaid call returns PaymentRequired inside the MCP tool result; retry with _meta['x402/payment']. On successful verification and settlement, the tool returns paid=true plus the settlement receipt in MCP response metadata."""
+    """Execute WORKMINE's native MCP x402 payment test for $0.001 USDC on Base. First call returns PaymentRequired; an x402-aware MCP client can retry with payment metadata and settle directly to WORKMINE."""
     _track("workmine_paid_ping", nonce=nonce[:120])
     if PAID_PING_HANDLER is None:
         return CallToolResult(content=[TextContent(type="text", text="Native MCP payment is temporarily unavailable; use the HTTP /v1/ping x402 endpoint instead.")], is_error=True)
-    meta: dict[str, Any] = {}
-    try:
-        request_meta = ctx.request_context.meta
-        if request_meta is not None and request_meta.model_extra:
-            meta = dict(request_meta.model_extra)
-    except Exception:
-        meta = {}
-    result = PAID_PING_HANDLER({"nonce":nonce}, {"_meta":meta,"toolName":"workmine_paid_ping"})
-    receipt = (result.meta or {}).get("x402/payment-response") if isinstance(result.meta, dict) else None
+    result = PAID_PING_HANDLER({"nonce":nonce}, ctx)
+    receipt = getattr(result, "meta", None) or getattr(result, "_meta", None)
+    if isinstance(receipt, dict):
+        receipt = receipt.get("x402/payment-response")
     if isinstance(receipt, dict) and receipt.get("success") and receipt.get("transaction"):
-        print(json.dumps({
-            "event":"WORKMINE_SETTLEMENT",
-            "source":"mcp",
-            "product":"paid_ping",
-            "amount_usdc":0.001,
-            "transaction":receipt.get("transaction"),
-            "network":receipt.get("network","eip155:8453"),
-        }, separators=(",",":")), flush=True)
-    content = [TextContent(type="text", text=str(item.get("text",""))) for item in result.content if isinstance(item, dict) and item.get("type") == "text"]
-    return CallToolResult(
-        content=content,
-        is_error=bool(result.is_error),
-        structured_content=result.structured_content,
-        _meta=result.meta or None,
-    )
-
+        print(json.dumps({"event":"WORKMINE_SETTLEMENT","source":"mcp","product":"paid_ping","amount_usdc":0.001,"transaction":receipt.get("transaction"),"network":receipt.get("network","eip155:8453")}, separators=(",",":")), flush=True)
+    return result
 
 @mcp.tool()
 def workmine_paid_ping_offer() -> dict[str, Any]:

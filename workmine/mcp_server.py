@@ -44,7 +44,6 @@ if MCP_PAY_TO:
         from x402.http import FacilitatorConfig, HTTPFacilitatorClientSync
         from x402.mechanisms.evm.exact import ExactEvmServerScheme
         from x402.mcp import MCPToolResult, ResourceInfo, SyncPaymentWrapperConfig, create_payment_wrapper_sync
-        from x402.mcp.server_sync import wrap_fastmcp_tool_sync
         from x402.schemas import ResourceConfig
         from x402.server import x402ResourceServerSync
 
@@ -72,12 +71,10 @@ if MCP_PAY_TO:
                 ),
             ),
         )
-        PAID_PING_HANDLER = wrap_fastmcp_tool_sync(
-            _paid_ping,
+        PAID_PING_HANDLER = _paid_ping(
             lambda args, _ctx: MCPToolResult(
                 content=[{"type":"text","text":json.dumps({"ok":True,"service":"WORKMINE","nonce":args.get("nonce",""),"paid":True})}]
-            ),
-            tool_name="workmine_paid_ping",
+            )
         )
         print(json.dumps({"event":"WORKMINE_MCP_PAYMENT_SETUP","ok":True,"tool":"workmine_paid_ping","price_usdc":0.001}, separators=(",",":")), flush=True)
     except Exception as exc:
@@ -165,7 +162,17 @@ def workmine_paid_ping(ctx: Context, nonce: Annotated[str, Field(max_length=120,
     _track("workmine_paid_ping", nonce=nonce[:120])
     if PAID_PING_HANDLER is None:
         return CallToolResult(content=[TextContent(type="text", text="Native MCP payment is temporarily unavailable; use the HTTP /v1/ping x402 endpoint instead.")], is_error=True)
-    result = PAID_PING_HANDLER({"nonce":nonce}, ctx)
+    request_meta: dict[str, Any] = {}
+    try:
+        meta_obj = ctx.request_context.meta
+        if meta_obj is not None:
+            if getattr(meta_obj, "model_extra", None):
+                request_meta.update(meta_obj.model_extra)
+            if hasattr(meta_obj, "model_dump"):
+                request_meta.update({k:v for k,v in meta_obj.model_dump(exclude_none=True).items() if k not in request_meta})
+    except Exception:
+        request_meta = {}
+    result = PAID_PING_HANDLER({"nonce":nonce}, {"_meta":request_meta,"toolName":"workmine_paid_ping"})
     receipt = getattr(result, "meta", None) or getattr(result, "_meta", None)
     if isinstance(receipt, dict):
         receipt = receipt.get("x402/payment-response")

@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 from pypdf import PdfReader
 
 APP_NAME = "WORKMINE"
-VERSION = "0.5.0"
+VERSION = "0.5.1"
 PAYMENT_MODE = os.getenv("WORKMINE_PAYMENT_MODE", "open").strip().lower()
 PAY_TO = os.getenv("PAY_TO", "").strip()
 X402_NETWORK = os.getenv("X402_NETWORK", "eip155:8453").strip()

@@ -570,7 +570,7 @@ def well_known_x402() -> dict[str, Any]:
         "version": 1,
         "resources": resources,
         "name": APP_NAME,
-        "summary": "Low-cost deterministic utility APIs for autonomous agents, paid per call over x402.",
+        "summary": "Pay-per-call x402 products for autonomous agents and API sellers: a premium seller launch kit plus deterministic utility APIs.",
         "homepage": base,
         "ecosystem": {"primaryChain": "Base", "primaryChainId": 8453, "currency": "USDC", "protocol": "x402"},
         "payment": {
@@ -645,7 +645,7 @@ Sitemap: {base}/sitemap.xml
 @app.get("/sitemap.xml", response_class=Response)
 def sitemap_xml() -> Response:
     base = PUBLIC_BASE_URL or "https://workmine-api.onrender.com"
-    paths = ["/", "/docs", "/catalog", "/llms.txt", "/.well-known/x402", "/x402/discovery.json", "/openapi.json"]
+    paths = ["/", "/launch-kit", "/docs", "/catalog", "/llms.txt", "/.well-known/x402", "/x402/discovery.json", "/openapi.json"]
     urls = "".join(f"<url><loc>{base}{path}</loc></url>" for path in paths)
     return Response(content=f'<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{urls}</urlset>', media_type="application/xml")
 
@@ -689,7 +689,7 @@ Paid endpoints:
 - POST /v1/json/repair — $0.003 — malformed JSON repair
 - POST /v1/text/redact — $0.002 — common identifier redaction
 - POST /v1/html/to-text — $0.003 — HTML text/link extraction
-- POST /v1/pdf/extract-text — $0.010 — text-layer PDF extraction\n- POST /v1/x402/launch-kit — $19.00 — deploy-ready x402 seller launch kit
+- POST /v1/pdf/extract-text — $0.010 — text-layer PDF extraction\n- POST /v1/x402/launch-kit — $19.00 — deploy-ready x402 seller package with runnable scaffold, manifests, deployment config and smoke test
 """
 
 
@@ -729,6 +729,23 @@ def stats() -> dict[str, Any]:
     return summary_stats()
 
 
+@app.get("/launch-kit", response_class=HTMLResponse)
+def launch_kit_page() -> str:
+    endpoint = (PUBLIC_BASE_URL or "https://workmine-api.onrender.com") + "/v1/x402/launch-kit"
+    return f"""<!doctype html>
+<html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
+<title>WORKMINE x402 Launch Kit — $19 USDC</title><meta name='description' content='Generate a deploy-ready x402 seller package for FastAPI or Express, paid once per generation in USDC on Base.'>
+<style>body{{font-family:ui-sans-serif,system-ui,-apple-system;max-width:860px;margin:48px auto;padding:0 20px;color:#111;line-height:1.5}}.hero{{padding:32px;border:1px solid #ddd;border-radius:18px}}h1{{font-size:42px;line-height:1.05}}.price{{font-size:34px;font-weight:800}}code,pre{{background:#f5f5f5;border-radius:8px}}pre{{padding:16px;overflow:auto}}li{{margin:8px 0}}a{{color:#111}}</style></head>
+<body><div class='hero'><h1>x402 Launch Kit</h1><div class='price'>$19 USDC · Base</div>
+<p>Generate a deploy-ready seller package for an API that wants to charge autonomous agents per request with x402.</p>
+<ul><li>Runnable FastAPI or Express scaffold</li><li>x402 seller manifest and discovery metadata</li><li>Render deployment configuration</li><li>README and smoke-test script</li><li>Marketplace/Agent402 registration checklist</li></ul>
+<p><strong>No account or API key.</strong> The paid endpoint returns an x402 challenge; an x402-capable buyer signs the exact USDC payment and retries.</p>
+<p><a href='/docs#/default/api_x402_launch_kit_v1_x402_launch_kit_post'>Open API request schema</a> · <a href='/catalog'>Full WORKMINE catalog</a></p></div>
+<h2>Endpoint</h2><pre>POST {escape(endpoint)}</pre>
+<h2>Minimum request</h2><pre>{{"service_name":"My Agent API","base_url":"https://api.example.com","pay_to":"0x...","stack":"fastapi"}}</pre>
+<p>Revenue is counted only after a confirmed settlement transaction. An HTTP 402 challenge alone is not a sale.</p></body></html>"""
+
+
 @app.get("/", response_class=HTMLResponse)
 def home() -> str:
     stats_data = summary_stats()
@@ -752,7 +769,7 @@ a{{color:#111}} </style></head><body>
 <div class='kpi'><div>Settlements</div><div class='n'>{stats_data['actual_settlements']}</div></div>
 <div class='kpi'><div>Settled USDC</div><div class='n'>{stats_data['actual_settled_usdc']:.4f}</div></div>
 <div class='kpi'><div>Modeled billable</div><div class='n'>${stats_data['modeled_billable_usd']:.4f}</div></div></div>
-<p><a href='/docs'>Interactive API docs</a> · <a href='/catalog'>Machine-readable catalog</a> · <a href='/stats'>Stats JSON</a></p></div>
+<p><strong>Featured:</strong> <a href='/launch-kit'>x402 Launch Kit — $19 USDC</a></p><p><a href='/docs'>Interactive API docs</a> · <a href='/catalog'>Machine-readable catalog</a> · <a href='/stats'>Stats JSON</a></p></div>
 <table><thead><tr><th>Product</th><th>Endpoint</th><th>Price/call</th><th>Purpose</th></tr></thead><tbody>{rows}</tbody></table>
 </body></html>"""
 

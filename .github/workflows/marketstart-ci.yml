@@ -17,5 +17,6 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
       - run: pip install -r marketstart/requirements.txt pytest httpx
       - run: PYTHONPATH=. pytest -q tests/test_marketstart.py

@@ -6,6 +6,6 @@ json-repair>=0.39,<1
 pypdf>=5,<7
 python-multipart>=0.0.20,<1
 jsonschema>=4.23,<5
-x402[fastapi,evm,extensions]>=2.20,<3
+x402[fastapi,evm,extensions,mcp]>=2.20,<3
 
 mcp>=2,<3

@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 from pypdf import PdfReader
 
 APP_NAME = "WORKMINE"
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 PAYMENT_MODE = os.getenv("WORKMINE_PAYMENT_MODE", "open").strip().lower()
 PAY_TO = os.getenv("PAY_TO", "").strip()
 X402_NETWORK = os.getenv("X402_NETWORK", "eip155:8453").strip()
@@ -37,6 +37,11 @@ MAX_TEXT_CHARS = int(os.getenv("MAX_TEXT_CHARS", "200000"))
 MAX_PDF_BYTES = int(os.getenv("MAX_PDF_BYTES", str(8 * 1024 * 1024)))
 
 PRODUCTS: dict[str, dict[str, Any]] = {
+    "x402_readiness_audit": {
+        "path": "/v1/x402/readiness-audit", "price": 0.05, "estimated_cost": 0.0001,
+        "description": "Audit an x402 seller manifest for agent discoverability and payment readiness; return a score, concrete issues and fixes.",
+        "tags": ["x402", "audit", "seller", "readiness", "bazaar", "agent"],
+    },
     "x402_launch_kit": {
         "path": "/v1/x402/launch-kit", "price": 19.0, "estimated_cost": 0.001,
         "description": "Generate a deploy-ready x402 seller package: runnable service scaffold, manifest, discovery metadata, deployment config, smoke test and marketplace registration checklist.",
@@ -133,6 +138,10 @@ STOPWORDS = {
     "but", "not", "all", "can", "into", "about", "как", "что", "это", "для", "или", "его", "она", "они", "так",
     "при", "без", "над", "под", "если", "уже", "еще", "ещё", "где", "чтобы", "который", "которые", "когда", "быть",
 }
+
+class X402ReadinessAuditInput(BaseModel):
+    manifest: dict[str, Any] = Field(description="x402/.well-known manifest JSON to audit")
+    expected_origin: str | None = Field(default=None, max_length=300, description="Optional public HTTPS origin expected in homepage/resources")
 
 class X402LaunchKitInput(BaseModel):
     service_name: str = Field(min_length=2, max_length=80)
@@ -372,17 +381,22 @@ if PAYMENT_MODE == "x402":
             )
 
         post_examples: dict[str, tuple[dict[str, Any], dict[str, Any], Any]] = {
+            "x402_readiness_audit": (
+                {"manifest": {"name": "Example API", "summary": "Paid agent API", "resources": ["https://api.example.com/v1/tool"], "payment": {"x402": {"version": 2, "currency": "USDC", "networks": ["eip155:8453"], "payTo": "0x0000000000000000000000000000000000000000"}}, "machineReadable": {"openapi": "https://api.example.com/openapi.json"}}, "expected_origin": "https://api.example.com"},
+                {"type": "object", "properties": {"manifest": {"type": "object"}, "expected_origin": {"type": ["string", "null"]}}, "required": ["manifest"]},
+                {"score": 100, "grade": "ready", "issues": [], "fixes": [], "agent_dispatch_ready": True},
+            ),
             "x402_launch_kit": (
                 {"service_name": "My Agent API", "base_url": "https://api.example.com", "pay_to": "0x0000000000000000000000000000000000000000", "stack": "fastapi", "product_path": "/v1/tool", "price_usd": 0.01, "description": "Useful paid agent tool."},
                 {"type": "object", "properties": {"service_name": {"type": "string"}, "base_url": {"type": "string"}, "pay_to": {"type": "string"}, "stack": {"type": "string", "enum": ["fastapi", "express"]}, "product_path": {"type": "string"}, "price_usd": {"type": "number"}, "description": {"type": "string"}}, "required": ["service_name", "base_url", "pay_to"]},
                 {"service": "My Agent API", "stack": "fastapi", "files": {"manifest.json": "...", "implementation.txt": "..."}, "registration": ["Deploy", "Verify 402", "Register origin"]},
             ),
-            "text_normalize": (
+            "normalize": (
                 {"text": "  Hello   world  "},
                 {"type": "object", "properties": {"text": {"type": "string", "description": "Text to normalize"}}, "required": ["text"]},
                 {"text": "Hello world"},
             ),
-            "text_keywords": (
+            "keywords": (
                 {"text": "Autonomous agents pay for useful API calls with USDC."},
                 {"type": "object", "properties": {"text": {"type": "string", "description": "Text to extract keywords from"}}, "required": ["text"]},
                 {"keywords": ["agents", "api", "calls", "usdc"]},
@@ -392,7 +406,7 @@ if PAYMENT_MODE == "x402":
                 {"type": "object", "properties": {"text": {"type": "string", "description": "Malformed JSON text"}}, "required": ["text"]},
                 {"value": {"name": "agent", "active": True}},
             ),
-            "text_redact": (
+            "redact": (
                 {"text": "Contact test@example.com or +1 555 010 2000"},
                 {"type": "object", "properties": {"text": {"type": "string", "description": "Text containing identifiers to redact"}}, "required": ["text"]},
                 {"text": "Contact [EMAIL] or [PHONE]"},
@@ -689,7 +703,7 @@ Paid endpoints:
 - POST /v1/json/repair — $0.003 — malformed JSON repair
 - POST /v1/text/redact — $0.002 — common identifier redaction
 - POST /v1/html/to-text — $0.003 — HTML text/link extraction
-- POST /v1/pdf/extract-text — $0.010 — text-layer PDF extraction\n- POST /v1/x402/launch-kit — $19.00 — deploy-ready x402 seller package with runnable scaffold, manifests, deployment config and smoke test
+- POST /v1/pdf/extract-text — $0.010 — text-layer PDF extraction\n- POST /v1/x402/readiness-audit — $0.050 — audit x402 seller readiness, discoverability and payment metadata\n- POST /v1/x402/launch-kit — $19.00 — deploy-ready x402 seller package with runnable scaffold, manifests, deployment config and smoke test
 """
 
 
@@ -773,6 +787,88 @@ a{{color:#111}} </style></head><body>
 <table><thead><tr><th>Product</th><th>Endpoint</th><th>Price/call</th><th>Purpose</th></tr></thead><tbody>{rows}</tbody></table>
 </body></html>"""
 
+
+
+@app.post("/v1/x402/readiness-audit")
+def api_x402_readiness_audit(payload: X402ReadinessAuditInput) -> dict[str, Any]:
+    started = time.perf_counter()
+    m = payload.manifest
+    issues: list[str] = []
+    fixes: list[str] = []
+    score = 100
+
+    def fail(points: int, issue: str, fix: str) -> None:
+        nonlocal score
+        score = max(0, score - points)
+        issues.append(issue)
+        fixes.append(fix)
+
+    name = str(m.get("name") or "").strip()
+    summary = str(m.get("summary") or m.get("description") or "").strip()
+    resources = m.get("resources")
+    payment = m.get("payment") if isinstance(m.get("payment"), dict) else {}
+    x402 = payment.get("x402") if isinstance(payment.get("x402"), dict) else {}
+    machine = m.get("machineReadable") if isinstance(m.get("machineReadable"), dict) else {}
+
+    if len(name) < 2:
+        fail(10, "Missing or weak service name.", "Add a concise, specific service name.")
+    if len(summary) < 20:
+        fail(10, "Summary is missing or too vague for agent routing.", "Add a 20+ character task-oriented summary describing the buyer outcome.")
+    if not isinstance(resources, list) or not resources:
+        fail(20, "No paid resources are advertised.", "Add at least one public HTTPS paid resource URL.")
+        resources = []
+    else:
+        bad = [r for r in resources if not isinstance(r, str) or not r.startswith("https://")]
+        if bad:
+            fail(10, "One or more resource URLs are not public HTTPS URLs.", "Publish every paid resource on a stable https:// URL.")
+    if not x402:
+        fail(25, "payment.x402 metadata is missing.", "Advertise x402 version, USDC, network and payTo under payment.x402.")
+    else:
+        if int(x402.get("version") or 0) != 2:
+            fail(8, "x402 version is not v2.", "Set payment.x402.version to 2.")
+        if str(x402.get("currency") or "").upper() != "USDC":
+            fail(7, "Currency is not declared as USDC.", "Set payment.x402.currency to USDC.")
+        networks = x402.get("networks") or ([x402.get("primaryNetwork")] if x402.get("primaryNetwork") else [])
+        if "eip155:8453" not in networks:
+            fail(10, "Base mainnet is not advertised.", "Include eip155:8453 in payment.x402.networks.")
+        pay_to = str(x402.get("payTo") or "").strip()
+        if not re.fullmatch(r"0x[a-fA-F0-9]{40}", pay_to):
+            fail(15, "payTo is missing or is not a valid EVM address.", "Set payment.x402.payTo to the seller's 0x-prefixed 40-byte EVM address.")
+    if not machine.get("openapi"):
+        fail(8, "OpenAPI discovery URL is missing.", "Add machineReadable.openapi so agents can inspect request schemas.")
+    if not machine.get("llmsTxt"):
+        fail(4, "llms.txt discovery URL is missing.", "Add machineReadable.llmsTxt for LLM-oriented discovery.")
+    if payload.expected_origin:
+        origin = payload.expected_origin.rstrip("/")
+        mismatched = [r for r in resources if isinstance(r, str) and not r.startswith(origin + "/")]
+        if mismatched:
+            fail(8, "Advertised resources do not match expected_origin.", "Use one stable public origin for discovery and paid resources.")
+
+    score = max(0, min(100, score))
+    grade = "ready" if score >= 85 else "needs_work" if score >= 60 else "not_ready"
+    record_event("x402_readiness_audit", started)
+    return {
+        "score": score,
+        "grade": grade,
+        "agent_dispatch_ready": score >= 85,
+        "issues": issues,
+        "fixes": fixes,
+        "checked": {
+            "identity": True,
+            "resource_urls": True,
+            "x402_v2": True,
+            "base_usdc": True,
+            "pay_to_format": True,
+            "machine_readable_discovery": True,
+            "origin_consistency": payload.expected_origin is not None,
+        },
+        "upsell": {
+            "product": "x402_launch_kit",
+            "price_usdc": 19.0,
+            "path": "/v1/x402/launch-kit",
+            "when": "Use the Launch Kit if you want WORKMINE to generate a deploy-ready seller package rather than only audit the manifest.",
+        },
+    }
 
 
 @app.post("/v1/x402/launch-kit")

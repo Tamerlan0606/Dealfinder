@@ -52,7 +52,15 @@ def test_factory_validation_and_render(tmp_path, monkeypatch):
     video = next(s for s in probe['streams'] if s['codec_type']=='video')
     assert (video['width'], video['height'], video['codec_name']) == (720, 1280, 'h264')
     assert any(s['codec_name']=='aac' for s in probe['streams'])
-    assert 21 <= float(probe['format']['duration']) <= 23
+    assert 16 <= float(probe['format']['duration']) <= 18
     # Range support allows publisher video probing and avoids re-downloading whole files.
     r = client.get(f'/media/factory/script/{token}.mp4', headers={'Range':'bytes=0-99'})
     assert r.status_code == 206 and len(r.content) == 100
+
+
+def test_entertainment_inventory_answers():
+    posts = client.get('/api/content-factory').json()['posts']
+    letters = next(p['script'] for p in posts if p['slug']=='letters')
+    assert letters['scenes'][0].count('F') == 6
+    assert all('#ecommerce' not in p['text'] for p in posts)
+    assert all('Free framework' not in p['script']['cta'] for p in posts)

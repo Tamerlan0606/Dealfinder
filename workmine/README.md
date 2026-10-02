@@ -6,6 +6,7 @@ WORKMINE — ферма микросервисов с оплатой за каж
 
 ## Возможности
 
+- Paid Ping — `GET /v1/ping` — **$0.001** — минимальная проверка реальной x402-оплаты и доступности
 - x402 Readiness Audit — `POST /v1/x402/readiness-audit` — **$0.05** — проверка manifest/discovery/payment readiness с конкретными исправлениями
 - x402 Launch Kit — `POST /v1/x402/launch-kit` — **$19** — готовый пакет запуска платного x402 API
 - Нормализация текста — `POST /v1/text/normalize` — $0.001
@@ -32,7 +33,7 @@ WORKMINE поддерживает x402 v2. Защищённый endpoint без 
 
 ## MCP
 
-Официальное имя сервера в MCP Registry: `io.github.Tamerlan0606/workmine` (v0.5.1). Для нового клиента бесплатный MCP-инструмент `workmine_start_here` показывает самый короткий путь к первой полезной покупке; `find_workmine_tool` маршрутизирует задачи аудита x402 на недорогой Readiness Audit за $0.05.
+Официальное имя сервера в MCP Registry: `io.github.Tamerlan0606/workmine` (v0.5.2). Для нового клиента бесплатный MCP-инструмент `workmine_start_here` показывает самый короткий путь к первой полезной покупке; `find_workmine_tool` маршрутизирует задачи аудита x402 на недорогой Readiness Audit за $0.05.
 
 WORKMINE предоставляет MCP discovery gateway для AI-агентов и MCP-клиентов. Он позволяет получить каталог платных API, подобрать подходящий инструмент по задаче и получить машиночитаемые инструкции x402.
 
@@ -51,6 +52,7 @@ WORKMINE is a pay-per-call microservice farm: many small, low-cost digital opera
 
 ## Included services
 
+- Paid Ping — `GET /v1/ping` — **$0.001** — minimum-cost live x402 payment/availability check
 - x402 Readiness Audit — `POST /v1/x402/readiness-audit` — **$0.05** — manifest/discovery/payment readiness audit with concrete fixes
 - x402 Launch Kit — `POST /v1/x402/launch-kit` — **$19** — deploy-ready x402 seller package
 - Text normalization — `POST /v1/text/normalize` — $0.001
@@ -65,7 +67,7 @@ WORKMINE supports x402 v2 on Base mainnet using USDC. HTTP 402 responses are pay
 
 ## Discovery
 
-Official MCP Registry server name: `io.github.Tamerlan0606/workmine` (v0.5.1). New clients can call the free `workmine_start_here` MCP tool for the shortest path to a useful first purchase; x402 audit/readiness/manifest-validation intents route to the $0.05 Readiness Audit.
+Official MCP Registry server name: `io.github.Tamerlan0606/workmine` (v0.5.2). New clients can call the free `workmine_start_here` MCP tool for the shortest path to a useful first purchase; x402 audit/readiness/manifest-validation intents route to the $0.05 Readiness Audit.
 
 - API: https://workmine-api.onrender.com
 - MCP: https://workmine-mcp.onrender.com/mcp

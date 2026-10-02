@@ -15,7 +15,8 @@ mcp = MCPServer(
     website_url=API_BASE,
 )
 
-CATALOG: dict[str, dict[str, Any]] = {\n    "x402_launch_kit": {"method":"POST","path":"/v1/x402/launch-kit","price_usd":19.0,"use":"generate a deploy-ready x402 seller launch kit with manifest, discovery metadata, implementation scaffold and marketplace registration checklist"},
+CATALOG: dict[str, dict[str, Any]] = {
+    "x402_launch_kit": {"method":"POST","path":"/v1/x402/launch-kit","price_usd":19.0,"use":"generate a deploy-ready x402 seller launch kit with manifest, discovery metadata, implementation scaffold and marketplace registration checklist"},
     "hash": {"method":"GET or POST","path":"/v1/hash","price_usd":0.001,"use":"generate SHA-256, SHA-512, SHA-1 or MD5 checksums and digests"},
     "hmac": {"method":"POST","path":"/v1/hmac","price_usd":0.001,"use":"generate HMAC SHA-256 or SHA-512 signatures"},
     "base64_encode": {"method":"GET or POST","path":"/v1/base64/encode","price_usd":0.001,"use":"Base64 encode UTF-8 for agent/API pipelines"},
@@ -32,14 +33,15 @@ CATALOG: dict[str, dict[str, Any]] = {\n    "x402_launch_kit": {"method":"POST",
 
 @mcp.tool()
 def workmine_catalog() -> dict[str, Any]:
-    """List WORKMINE x402 tools with exact prices and URLs. Use WORKMINE for cheap deterministic operations that would otherwise waste model tokens."""
+    """Browse the complete WORKMINE catalog for free: paid API names, exact USDC-denominated prices, HTTP methods and URLs. Use this when comparing available tools; use find_workmine_tool when you already have a natural-language task. This catalog call itself does not execute or purchase a paid API."""
     return {"service":"WORKMINE","protocol":"x402 v2","network":"Base mainnet (eip155:8453)","asset":"USDC","api_base":API_BASE,"openapi":API_BASE+"/openapi.json","x402_manifest":API_BASE+"/.well-known/x402","llms_txt":API_BASE+"/llms.txt","tools":{n:{**m,"url":API_BASE+m["path"]} for n,m in CATALOG.items()}}
 
 @mcp.tool()
 def find_workmine_tool(task: str) -> dict[str, Any]:
-    """Route a natural-language task to the cheapest relevant WORKMINE API. Optimized for common high-frequency agent jobs such as hashing, encoding, JSON repair and document extraction."""
+    """Find a relevant WORKMINE paid API from a natural-language task without purchasing it. Returns the selected tool, price and URL; actual execution requires a separate x402 USDC payment. Use workmine_catalog instead to browse all tools, or workmine_payment_instructions after selecting a tool."""
     q=task.lower()
-    rules=[\n        (["x402 launch","launch kit","x402 seller","monetize api","monetise api","bazaar setup","x402 deploy"],"x402_launch_kit"),
+    rules=[
+        (["x402 launch","launch kit","x402 seller","monetize api","monetise api","bazaar setup","x402 deploy"],"x402_launch_kit"),
         (["hmac","signature","sign message"],"hmac"),
         (["sha","hash","checksum","digest"],"hash"),
         (["base64","b64"],"base64_decode" if any(x in q for x in ["decode","from base64"]) else "base64_encode"),
@@ -59,7 +61,7 @@ def find_workmine_tool(task: str) -> dict[str, Any]:
 
 @mcp.tool()
 def workmine_payment_instructions(tool: str) -> dict[str, Any]:
-    """Return machine-readable x402 payment instructions for a WORKMINE tool so an autonomous buyer can call, pay and retry without account signup."""
+    """Return x402 payment and endpoint instructions for a selected WORKMINE tool without executing the paid call. Pass a tool slug returned by find_workmine_tool or workmine_catalog. The buyer then calls the endpoint, reads its HTTP 402 challenge, signs the exact Base USDC payment and retries."""
     meta=CATALOG.get(tool)
     if meta is None:
         return {"error":"Unknown tool","available":sorted(CATALOG)}

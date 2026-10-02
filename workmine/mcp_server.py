@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import Any, Annotated
+
+from pydantic import Field
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
@@ -37,7 +39,7 @@ def workmine_catalog() -> dict[str, Any]:
     return {"service":"WORKMINE","protocol":"x402 v2","network":"Base mainnet (eip155:8453)","asset":"USDC","api_base":API_BASE,"openapi":API_BASE+"/openapi.json","x402_manifest":API_BASE+"/.well-known/x402","llms_txt":API_BASE+"/llms.txt","tools":{n:{**m,"url":API_BASE+m["path"]} for n,m in CATALOG.items()}}
 
 @mcp.tool()
-def find_workmine_tool(task: str) -> dict[str, Any]:
+def find_workmine_tool(task: Annotated[str, Field(description="Natural-language task the buyer needs completed, for example: 'repair malformed JSON', 'extract PDF text', or 'launch an x402 seller API'.")]) -> dict[str, Any]:
     """Find a relevant WORKMINE paid API from a natural-language task without purchasing it. Returns the selected tool, price and URL; actual execution requires a separate x402 USDC payment. Use workmine_catalog instead to browse all tools, or workmine_payment_instructions after selecting a tool."""
     q=task.lower()
     rules=[
@@ -60,7 +62,40 @@ def find_workmine_tool(task: str) -> dict[str, Any]:
     return {"match":None,"message":"No strong semantic match. Do not spend money on an irrelevant tool.","catalog":API_BASE+"/catalog"}
 
 @mcp.tool()
-def workmine_payment_instructions(tool: str) -> dict[str, Any]:
+def workmine_launch_kit_offer() -> dict[str, Any]:
+    """Quote the premium WORKMINE x402 Launch Kit without charging anything. Use this when an API developer or autonomous agent wants to monetize an HTTP service with x402 on Base. Returns the exact $19 USDC product URL, required request fields, deliverables and payment flow. This MCP call is free and read-only; payment occurs only if the buyer later calls the returned HTTP endpoint and signs its x402 challenge."""
+    meta = CATALOG["x402_launch_kit"]
+    return {
+        "product": "x402_launch_kit",
+        "price_usdc": meta["price_usd"],
+        "network": "Base mainnet (eip155:8453)",
+        "endpoint": API_BASE + meta["path"],
+        "method": "POST",
+        "what_you_get": [
+            "x402 seller manifest",
+            "discovery metadata",
+            "FastAPI or Express implementation scaffold",
+            "marketplace registration checklist",
+            "seller economics metadata",
+        ],
+        "required_input": {
+            "service_name": "Name of the API/service",
+            "base_url": "Public HTTPS origin",
+            "pay_to": "Seller EVM receiving address",
+        },
+        "optional_input": {
+            "stack": "fastapi or express; default fastapi",
+            "product_path": "Paid route; default /v1/tool",
+            "price_usd": "Seller's intended price; default 0.01",
+            "description": "What the seller's paid API does",
+        },
+        "payment": "Call the endpoint, read HTTP 402 PAYMENT-REQUIRED, sign the exact Base USDC payment, then retry.",
+        "charged_now": False,
+    }
+
+
+@mcp.tool()
+def workmine_payment_instructions(tool: Annotated[str, Field(description="Exact WORKMINE product slug returned by find_workmine_tool or workmine_catalog, for example x402_launch_kit, repair_json, or pdf_extract.")]) -> dict[str, Any]:
     """Return x402 payment and endpoint instructions for a selected WORKMINE tool without executing the paid call. Pass a tool slug returned by find_workmine_tool or workmine_catalog. The buyer then calls the endpoint, reads its HTTP 402 challenge, signs the exact Base USDC payment and retries."""
     meta=CATALOG.get(tool)
     if meta is None:

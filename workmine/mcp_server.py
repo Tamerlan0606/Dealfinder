@@ -11,11 +11,11 @@ PORT = int(os.getenv("PORT", "8000"))
 
 mcp = MCPServer(
     "WORKMINE Discovery",
-    description="Fast low-cost x402 utility APIs for AI agents: hashing, HMAC, Base64, URL encoding, JSON repair, text processing, HTML extraction and PDF text extraction. Base USDC pay-per-call.",
+    description="Pay-per-call x402 products for AI agents and API operators, including a premium x402 seller launch kit plus low-cost utilities: hashing, HMAC, Base64, URL encoding, JSON repair, text processing, HTML extraction and PDF text extraction. Base USDC pay-per-call.",
     website_url=API_BASE,
 )
 
-CATALOG: dict[str, dict[str, Any]] = {
+CATALOG: dict[str, dict[str, Any]] = {\n    "x402_launch_kit": {"method":"POST","path":"/v1/x402/launch-kit","price_usd":19.0,"use":"generate a deploy-ready x402 seller launch kit with manifest, discovery metadata, implementation scaffold and marketplace registration checklist"},
     "hash": {"method":"GET or POST","path":"/v1/hash","price_usd":0.001,"use":"generate SHA-256, SHA-512, SHA-1 or MD5 checksums and digests"},
     "hmac": {"method":"POST","path":"/v1/hmac","price_usd":0.001,"use":"generate HMAC SHA-256 or SHA-512 signatures"},
     "base64_encode": {"method":"GET or POST","path":"/v1/base64/encode","price_usd":0.001,"use":"Base64 encode UTF-8 for agent/API pipelines"},
@@ -39,7 +39,7 @@ def workmine_catalog() -> dict[str, Any]:
 def find_workmine_tool(task: str) -> dict[str, Any]:
     """Route a natural-language task to the cheapest relevant WORKMINE API. Optimized for common high-frequency agent jobs such as hashing, encoding, JSON repair and document extraction."""
     q=task.lower()
-    rules=[
+    rules=[\n        (["x402 launch","launch kit","x402 seller","monetize api","monetise api","bazaar setup","x402 deploy"],"x402_launch_kit"),
         (["hmac","signature","sign message"],"hmac"),
         (["sha","hash","checksum","digest"],"hash"),
         (["base64","b64"],"base64_decode" if any(x in q for x in ["decode","from base64"]) else "base64_encode"),

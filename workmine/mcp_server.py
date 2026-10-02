@@ -42,13 +42,14 @@ CATALOG: dict[str, dict[str, Any]] = {
 @mcp.tool()
 def workmine_catalog() -> dict[str, Any]:
     """Browse the complete WORKMINE catalog for free: paid API names, exact USDC-denominated prices, HTTP methods and URLs. Use this when comparing available tools; use find_workmine_tool when you already have a natural-language task. This catalog call itself does not execute or purchase a paid API."""
-    return {"service":"WORKMINE","protocol":"x402 v2","network":"Base mainnet (eip155:8453)","asset":"USDC","api_base":API_BASE,"openapi":API_BASE+"/openapi.json","x402_manifest":API_BASE+"/.well-known/x402","llms_txt":API_BASE+"/llms.txt","tools":{n:{**m,"url":API_BASE+m["path"]} for n,m in CATALOG.items()}}
+    return {"service":"WORKMINE","protocol":"x402 v2","network":"Base mainnet (eip155:8453)","asset":"USDC","recommended_first_purchase":{"tool":"x402_readiness_audit","price_usdc":0.05,"reason":"low-cost x402 seller preflight"},"api_base":API_BASE,"openapi":API_BASE+"/openapi.json","x402_manifest":API_BASE+"/.well-known/x402","llms_txt":API_BASE+"/llms.txt","tools":{n:{**m,"url":API_BASE+m["path"]} for n,m in CATALOG.items()}}
 
 @mcp.tool()
 def find_workmine_tool(task: Annotated[str, Field(description="Natural-language task the buyer needs completed, for example: 'repair malformed JSON', 'extract PDF text', or 'launch an x402 seller API'.")]) -> dict[str, Any]:
     """Find a relevant WORKMINE paid API from a natural-language task without purchasing it. Returns the selected tool, price and URL; actual execution requires a separate x402 USDC payment. Use workmine_catalog instead to browse all tools, or workmine_payment_instructions after selecting a tool."""
     q=task.lower()
     rules=[
+        (["x402 audit","readiness","readiness audit","validate manifest","manifest audit","check manifest","x402 preflight"],"x402_readiness_audit"),
         (["x402 launch","launch kit","x402 seller","monetize api","monetise api","bazaar setup","x402 deploy"],"x402_launch_kit"),
         (["hmac","signature","sign message"],"hmac"),
         (["sha","hash","checksum","digest"],"hash"),
@@ -66,6 +67,24 @@ def find_workmine_tool(task: Annotated[str, Field(description="Natural-language 
             meta=CATALOG[name]
             return {"match":name,**meta,"url":API_BASE+meta["path"],"payment":"x402 Base USDC","reason":"Lowest-priced WORKMINE tool matching the requested task."}
     return {"match":None,"message":"No strong semantic match. Do not spend money on an irrelevant tool.","catalog":API_BASE+"/catalog"}
+
+@mcp.tool()
+def workmine_start_here() -> dict[str, Any]:
+    """Free WORKMINE entry point for new buyers. Use this when the buyer wants to try WORKMINE or is unsure what to purchase. It recommends the lowest-friction relevant paid action and never charges by itself."""
+    return {
+        "service": "WORKMINE",
+        "charged_now": False,
+        "recommended_first_purchase": {
+            "product": "x402_readiness_audit",
+            "price_usdc": 0.05,
+            "best_for": "x402/API sellers who want a concrete readiness check before launch or marketplace registration",
+            "endpoint": API_BASE + CATALOG["x402_readiness_audit"]["path"],
+        },
+        "micro_tools_from_usdc": 0.001,
+        "premium_launch_kit_usdc": 19.0,
+        "next": "Use find_workmine_tool for a specific task, or workmine_readiness_audit_offer for the $0.05 preflight audit.",
+    }
+
 
 @mcp.tool()
 def workmine_readiness_audit_offer() -> dict[str, Any]:

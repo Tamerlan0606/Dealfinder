@@ -47,7 +47,7 @@ if MCP_PAY_TO:
         from x402.schemas import ResourceConfig
         from x402.server import x402ResourceServerSync
 
-        _facilitator = HTTPFacilitatorClientSync(FacilitatorConfig(url=os.getenv("X402_FACILITATOR_URL", "https://x402.org/facilitator")))
+        _facilitator = HTTPFacilitatorClientSync(FacilitatorConfig(url=os.getenv("X402_FACILITATOR_URL", "https://facilitator.payai.network")))
         _resource_server = x402ResourceServerSync(_facilitator)
         _resource_server.register("eip155:8453", ExactEvmServerScheme())
         _resource_server.initialize()

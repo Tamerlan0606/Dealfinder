@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b1020">
+<title>ReadSprint</title>
+<link rel="manifest" href="manifest.webmanifest">
+<style>
+:root{--bg:#0b1020;--panel:#121a2f;--muted:#92a0bd;--text:#f8fafc;--accent:#7dd3fc;--border:#24304c}
+*{box-sizing:border-box}body{margin:0;background:linear-gradient(180deg,#08101e,#0b1020 30%,#0a0f1b);color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+.wrap{max-width:980px;margin:auto;padding:22px}.top{display:flex;justify-content:space-between;gap:16px;align-items:center}.brand{font-weight:800;font-size:22px}
+.pill{border:1px solid var(--border);padding:8px 11px;border-radius:999px;color:var(--muted);font-size:13px}
+.hero{padding:42px 0 22px}.hero h1{font-size:clamp(38px,7vw,72px);line-height:.98;margin:0;letter-spacing:-.045em}.hero p{max-width:680px;color:var(--muted);font-size:18px;line-height:1.55}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}@media(max-width:780px){.grid{grid-template-columns:1fr}}
+.card{background:rgba(18,26,47,.9);border:1px solid var(--border);border-radius:24px;padding:18px}
+textarea{width:100%;height:260px;background:#0b1327;color:#e5edf9;border:1px solid var(--border);border-radius:16px;padding:14px;resize:vertical;font:15px/1.55 system-ui}
+button,.file{border:0;border-radius:14px;padding:12px 15px;font-weight:750;cursor:pointer;background:#e8f7ff;color:#07111f}
+button.secondary,.file.secondary{background:#17223c;color:#e6edf8;border:1px solid var(--border)}.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+input[type=range]{width:180px}.reader{min-height:335px;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center}
+#word{font-size:clamp(42px,8vw,88px);font-weight:850;letter-spacing:-.04em;min-height:100px;display:flex;align-items:center}.focus{color:var(--accent)}
+.meta{color:var(--muted);font-size:14px}.bar{height:9px;background:#0b1327;border-radius:20px;overflow:hidden;margin:18px 0}.bar>i{display:block;height:100%;width:0;background:#e8f7ff}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px}.stat{background:#0b1327;border:1px solid var(--border);border-radius:14px;padding:11px}.stat b{display:block;font-size:20px}
+.note{margin-top:16px;color:#b7c3db}.footer{padding:28px 0 50px;color:#6f7d9a;font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div class="top"><div class="brand">ReadSprint</div><div class="pill">Бесплатный MVP</div></div>
+<section class="hero"><h1>Читай быстрее.<br>Не теряй фокус.</h1><p>Вставь текст, выбери скорость — ReadSprint показывает по одному слову в центре экрана. Данные остаются в браузере.</p></section>
+<div class="grid">
+<section class="card"><h2>1. Добавь текст</h2><textarea id="source" placeholder="Вставь статью, конспект или любой текст..."></textarea>
+<div class="row" style="margin-top:12px"><button id="load">Загрузить</button><label class="file secondary">Открыть .txt/.md<input id="file" type="file" accept=".txt,.md,text/plain,text/markdown" hidden></label><button class="secondary" id="demo">Демо</button></div>
+<div class="note">Регистрация не нужна. Платежи на этапе проверки спроса отключены.</div></section>
+<section class="card reader"><div class="meta" id="hint">Загрузи текст слева</div><div id="word">ReadSprint</div><div class="bar" style="width:100%"><i id="progress"></i></div>
+<div class="row" style="justify-content:center"><button id="play">▶ Старт</button><button class="secondary" id="back">−10</button><button class="secondary" id="forward">+10</button><button class="secondary" id="reset">Сброс</button></div>
+<div class="row" style="margin-top:14px;justify-content:center"><span class="meta">Скорость</span><input id="wpm" type="range" min="120" max="900" step="10" value="320"><b id="wpmv">320 WPM</b></div>
+<div class="stats" style="width:100%"><div class="stat"><span class="meta">Слов</span><b id="count">0</b></div><div class="stat"><span class="meta">Пройдено</span><b id="done">0%</b></div><div class="stat"><span class="meta">Осталось</span><b id="eta">—</b></div></div>
+</section></div>
+<div class="footer">ReadSprint — оригинальный прототип для тестирования спроса.</div>
+</div>
+<script>
+let words=[],idx=0,timer=null,running=false; const $=id=>document.getElementById(id);
+const source=$('source'),word=$('word'),progress=$('progress'),hint=$('hint');
+function clean(t){return t.replace(/\s+/g,' ').trim()}
+function loadText(t){const s=clean(t);words=s?s.split(' '):[];idx=0;stop();render();if(words.length){localStorage.setItem('readsprint-last',s);hint.textContent='Готово к чтению'}}
+function render(){ $('count').textContent=words.length;if(!words.length){word.textContent='ReadSprint';progress.style.width='0%';$('done').textContent='0%';$('eta').textContent='—';return}
+idx=Math.max(0,Math.min(idx,words.length-1));let w=words[idx],p=Math.max(1,Math.floor(w.length*.38));
+word.innerHTML=w.slice(0,p)+'<span class="focus">'+(w[p]||'')+'</span>'+w.slice(p+1);let pct=Math.round(((idx+1)/words.length)*100);progress.style.width=pct+'%';$('done').textContent=pct+'%';
+let left=words.length-idx-1,mins=left/Number($('wpm').value);$('eta').textContent=mins<1?Math.max(1,Math.round(mins*60))+' сек':Math.ceil(mins)+' мин'}
+function schedule(){if(!running||!words.length)return;let w=words[idx]||'',extra=/[.!?…]$/.test(w)?1.8:/[,;:]$/.test(w)?1.35:1;
+timer=setTimeout(()=>{if(idx<words.length-1){idx++;render();schedule()}else stop()},60000/Number($('wpm').value)*extra)}
+function start(){if(!words.length)return;running=true;$('play').textContent='⏸ Пауза';schedule()}
+function stop(){running=false;clearTimeout(timer);timer=null;$('play').textContent='▶ Старт'}
+$('load').onclick=()=>loadText(source.value);$('play').onclick=()=>running?stop():start();$('reset').onclick=()=>{stop();idx=0;render()};
+$('back').onclick=()=>{idx=Math.max(0,idx-10);render()};$('forward').onclick=()=>{idx=Math.min(Math.max(0,words.length-1),idx+10);render()};
+$('wpm').oninput=e=>{$('wpmv').textContent=e.target.value+' WPM';if(running){clearTimeout(timer);schedule()}render()};
+$('file').onchange=async e=>{let f=e.target.files[0];if(f){source.value=await f.text();loadText(source.value)}};
+$('demo').onclick=()=>{source.value='Скорость чтения растет, когда взгляд меньше прыгает по строке. В режиме RSVP каждое слово появляется в одной точке экрана. Это помогает удерживать внимание и постепенно повышать темп.';loadText(source.value)};
+const prev=localStorage.getItem('readsprint-last');if(prev){source.value=prev;loadText(prev)}
+if('serviceWorker' in navigator){navigator.serviceWorker.register('./sw.js').catch(()=>{})}
+</script>
+</body></html>

@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 from pypdf import PdfReader
 
 APP_NAME = "WORKMINE"
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 PAYMENT_MODE = os.getenv("WORKMINE_PAYMENT_MODE", "open").strip().lower()
 PAY_TO = os.getenv("PAY_TO", "").strip()
 X402_NETWORK = os.getenv("X402_NETWORK", "eip155:8453").strip()
@@ -39,7 +39,7 @@ MAX_PDF_BYTES = int(os.getenv("MAX_PDF_BYTES", str(8 * 1024 * 1024)))
 PRODUCTS: dict[str, dict[str, Any]] = {
     "x402_launch_kit": {
         "path": "/v1/x402/launch-kit", "price": 19.0, "estimated_cost": 0.001,
-        "description": "Generate a deploy-ready x402 seller launch kit: manifest, discovery metadata, implementation scaffold and marketplace registration checklist.",
+        "description": "Generate a deploy-ready x402 seller package: runnable service scaffold, manifest, discovery metadata, deployment config, smoke test and marketplace registration checklist.",
         "tags": ["x402", "seller", "launch", "bazaar", "monetization", "developer"],
     },
     "normalize": {
@@ -764,38 +764,149 @@ def api_x402_launch_kit(payload: X402LaunchKitInput) -> dict[str, Any]:
     base_url = payload.base_url.rstrip("/")
     product_path = "/" + payload.product_path.lstrip("/")
     manifest = {
-        "spec": "agent402-service-manifest/1", "version": 1, "name": payload.service_name,
-        "summary": payload.description, "homepage": base_url, "resources": [base_url + product_path],
+        "spec": "agent402-service-manifest/1",
+        "version": 1,
+        "name": payload.service_name,
+        "summary": payload.description,
+        "homepage": base_url,
+        "resources": [base_url + product_path],
         "ecosystem": {"primaryChain": "Base", "primaryChainId": 8453, "currency": "USDC", "protocol": "x402"},
         "payment": {"x402": {"version": 2, "currency": "USDC", "networks": ["eip155:8453"], "primaryNetwork": "eip155:8453", "payTo": payload.pay_to, "nonCustodial": True}},
         "machineReadable": {"openapi": base_url + "/openapi.json", "llmsTxt": base_url + "/llms.txt"},
     }
+    discovery = {
+        "name": payload.service_name,
+        "resource": base_url + product_path,
+        "method": "POST",
+        "price_usd": payload.price_usd,
+        "network": "eip155:8453",
+        "scheme": "exact",
+        "description": payload.description,
+    }
+
     if payload.stack == "fastapi":
-        implementation = f"""# FastAPI x402 scaffold
-# pip install fastapi uvicorn x402
-PAY_TO = "{payload.pay_to}"
-NETWORK = "eip155:8453"
-PRICE = "${payload.price_usd:g}"
-# Protect POST {product_path} with x402 middleware; publish /.well-known/x402 and verify unpaid requests return HTTP 402.
-"""
+        app_source = "\n".join([
+            "import os",
+            "from fastapi import FastAPI",
+            "from pydantic import BaseModel",
+            "",
+            "app = FastAPI(title=" + repr(payload.service_name) + ")",
+            "PAY_TO = os.environ['PAY_TO']",
+            "NETWORK = 'eip155:8453'",
+            "PRICE_USD = " + repr(payload.price_usd),
+            "",
+            "class ToolInput(BaseModel):",
+            "    input: str",
+            "",
+            "@app.get('/health')",
+            "def health():",
+            "    return {'ok': True}",
+            "",
+            "# Install x402 middleware for your chosen facilitator and protect this route:",
+            "@app.post(" + repr(product_path) + ")",
+            "def paid_tool(body: ToolInput):",
+            "    return {'result': body.input, 'replace_me': 'Implement your paid capability here'}",
+            "",
+            "# Publish /.well-known/x402 using the generated manifest.json file.",
+        ])
+        deploy_file = "\n".join([
+            "services:",
+            "  - type: web",
+            "    name: " + re.sub(r"[^a-z0-9-]+", "-", payload.service_name.lower()).strip("-"),
+            "    runtime: python",
+            "    buildCommand: pip install -r requirements.txt",
+            "    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT",
+            "    envVars:",
+            "      - key: PAY_TO",
+            "        sync: false",
+        ])
+        dependency_file = "fastapi\nuvicorn[standard]\nx402\n"
+        run_command = "uvicorn app:app --host 0.0.0.0 --port 8000"
+        source_name = "app.py"
     else:
-        implementation = f"""// Express x402 scaffold
-// npm install express @x402/core @x402/express
-const PAY_TO = "{payload.pay_to}";
-const NETWORK = "eip155:8453";
-const PRICE = "${payload.price_usd:g}";
-// Protect POST {product_path}; publish /.well-known/x402 and verify unpaid requests return HTTP 402.
-"""
-    discovery = {"name": payload.service_name, "resource": base_url + product_path, "method": "POST", "price_usd": payload.price_usd, "network": "eip155:8453", "scheme": "exact", "description": payload.description}
+        app_source = "\n".join([
+            "import express from 'express';",
+            "const app = express();",
+            "app.use(express.json());",
+            "const PAY_TO = process.env.PAY_TO;",
+            "const NETWORK = 'eip155:8453';",
+            "const PRICE_USD = " + repr(payload.price_usd) + ";",
+            "app.get('/health', (_req,res) => res.json({ok:true}));",
+            "app.post(" + json.dumps(product_path) + ", (req,res) => res.json({result:req.body, replace_me:'Implement your paid capability here'}));",
+            "// Install @x402/express middleware and protect the paid route using PAY_TO, NETWORK and PRICE_USD.",
+            "app.listen(process.env.PORT || 8000);",
+        ])
+        deploy_file = "\n".join([
+            "services:",
+            "  - type: web",
+            "    name: " + re.sub(r"[^a-z0-9-]+", "-", payload.service_name.lower()).strip("-"),
+            "    runtime: node",
+            "    buildCommand: npm install",
+            "    startCommand: node server.js",
+            "    envVars:",
+            "      - key: PAY_TO",
+            "        sync: false",
+        ])
+        dependency_file = json.dumps({"name": "x402-seller", "type": "module", "scripts": {"start": "node server.js"}, "dependencies": {"express": "^5.0.0", "@x402/core": "latest", "@x402/express": "latest"}}, indent=2)
+        run_command = "npm start"
+        source_name = "server.js"
+
+    smoke_test = "\n".join([
+        "# 1. Health must be public:",
+        "curl -i " + base_url + "/health",
+        "",
+        "# 2. Unpaid paid-route request must return HTTP 402:",
+        "curl -i -X POST " + base_url + product_path + " -H 'content-type: application/json' -d '{\"input\":\"test\"}'",
+        "",
+        "# 3. Verify the response contains a valid x402 PAYMENT-REQUIRED challenge before registering.",
+    ])
+    readme = "\n".join([
+        "# " + payload.service_name,
+        "",
+        payload.description,
+        "",
+        "## Economics",
+        "- Price: $" + format(payload.price_usd, "g") + " USDC per successful paid call",
+        "- Network: Base mainnet (eip155:8453)",
+        "- Seller wallet: configure PAY_TO as a secret environment variable",
+        "",
+        "## Deploy",
+        "1. Add the generated files to a repository.",
+        "2. Configure PAY_TO.",
+        "3. Run: " + run_command,
+        "4. Confirm /health returns 200.",
+        "5. Confirm an unpaid " + product_path + " request returns 402.",
+        "6. Register the public HTTPS origin with x402 directories/routers.",
+        "",
+        "Never count HTTP 402 probes as revenue. Count only confirmed settlement receipts.",
+    ])
+    files = {
+        source_name: app_source,
+        "manifest.json": json.dumps(manifest, ensure_ascii=False, indent=2),
+        "discovery.json": json.dumps(discovery, ensure_ascii=False, indent=2),
+        "render.yaml": deploy_file,
+        "README.md": readme,
+        "smoke-test.sh": smoke_test,
+    }
+    files["requirements.txt" if payload.stack == "fastapi" else "package.json"] = dependency_file
     registration = [
-        "Deploy the HTTPS origin and expose /.well-known/x402 plus /openapi.json.",
-        f"Verify an unpaid POST {product_path} returns a valid x402 HTTP 402 challenge.",
-        "Register the origin with Agent402 POST /api/index/register.",
-        "Keep the origin healthy so hourly crawlers continue routing buyers.",
-        "Count revenue only from confirmed settlement receipts, never from 402 probes.",
+        "Deploy the generated project to a public HTTPS origin.",
+        "Publish manifest.json at /.well-known/x402 and expose /openapi.json.",
+        "Run smoke-test.sh and require an unpaid paid-route request to return a valid HTTP 402 challenge.",
+        "Register the origin with Agent402 and x402/Bazaar-compatible discovery surfaces.",
+        "Keep health and payment challenge endpoints stable for crawler rechecks.",
+        "Count revenue only from confirmed settlement receipts with transaction identifiers.",
     ]
     record_event("x402_launch_kit", started)
-    return {"service": payload.service_name, "stack": payload.stack, "files": {".well-known/x402.json": json.dumps(manifest, ensure_ascii=False, indent=2), "discovery.json": json.dumps(discovery, ensure_ascii=False, indent=2), "implementation.txt": implementation}, "registration": registration, "economics": {"seller_price_usd": payload.price_usd, "seller_pay_to": payload.pay_to, "network": "Base", "asset": "USDC"}}
+    return {
+        "service": payload.service_name,
+        "stack": payload.stack,
+        "product": "WORKMINE x402 Launch Kit",
+        "files": files,
+        "registration": registration,
+        "economics": {"seller_price_usd": payload.price_usd, "seller_pay_to": payload.pay_to, "network": "Base", "asset": "USDC"},
+        "validation": {"expected_unpaid_status": 402, "settlement_required_for_revenue": True},
+    }
 
 @app.post("/v1/text/normalize")
 def api_normalize(payload: NormalizeInput) -> dict[str, Any]:

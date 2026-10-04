@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import json
 import urllib.request
+import time
 from datetime import datetime, timezone
 from typing import Any, Annotated
 
@@ -50,7 +51,18 @@ if MCP_PAY_TO:
         _facilitator = HTTPFacilitatorClientSync(FacilitatorConfig(url=os.getenv("X402_FACILITATOR_URL", "https://facilitator.payai.network")))
         _resource_server = x402ResourceServerSync(_facilitator)
         _resource_server.register("eip155:8453", ExactEvmServerScheme())
-        _resource_server.initialize()
+        _init_error = None
+        for _attempt in range(1, 5):
+            try:
+                _resource_server.initialize()
+                _init_error = None
+                break
+            except Exception as exc:
+                _init_error = exc
+                if _attempt == 4:
+                    raise
+                print(json.dumps({"event":"WORKMINE_MCP_PAYMENT_RETRY","attempt":_attempt,"error":str(exc)[:200]}, separators=(",",":")), flush=True)
+                time.sleep(min(2 ** (_attempt - 1), 4))
         _accepts = _resource_server.build_payment_requirements(
             ResourceConfig(
                 scheme="exact",

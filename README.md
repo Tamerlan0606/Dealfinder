@@ -1,30 +1,42 @@
-# DealFinder Mobile
+# WORKMINE — x402 pay-per-call APIs for AI agents
 
-Облачный MVP под iPhone: мобильная веб-панель + Telegram-уведомления + API для покупателей/поставщиков/сопоставления.
+WORKMINE is a remote MCP gateway and x402 API seller for autonomous agents. Discovery is free; paid execution settles in **USDC on Base mainnet** with no WORKMINE account or API key.
 
-## Deploy
+## Start here
 
-Проект рассчитан на Render. Подключается как Web Service из GitHub. Build: `pip install -r requirements.txt`; Start: `uvicorn run:app --host 0.0.0.0 --port $PORT`.
+- **$0.001 Paid Ping** — verify an end-to-end x402 purchase at minimum cost.
+- **$0.001 Hash / HMAC / Base64 / URL encoding** — deterministic utilities for agent pipelines.
+- **$0.003 JSON Repair** — repair malformed JSON into valid structured data.
+- **$0.01 PDF text extraction** — extract a document's text layer.
+- **$0.05 x402 Readiness Audit** — score an x402 seller manifest and return concrete fixes.
+- **$19 x402 Launch Kit** — generate a deploy-ready seller package.
 
-После deploy панель открывается по URL Render и нормально работает в Safari на iPhone.
+### Machine discovery
 
-## Environment
+- MCP server: https://workmine-mcp.onrender.com/mcp
+- API: https://workmine-api.onrender.com
+- x402 manifest: https://workmine-api.onrender.com/.well-known/x402
+- OpenAPI: https://workmine-api.onrender.com/openapi.json
+- LLM discovery: https://workmine-api.onrender.com/llms.txt
+- Discovery JSON: https://workmine-api.onrender.com/x402/discovery.json
+- Official MCP Registry name: `io.github.Tamerlan0606/workmine`
 
-`DRY_RUN=true` — безопасный режим. Для реальных писем и Telegram необходимо добавить соответствующие переменные в Render. Массовую рассылку без законного основания не включать.
+For a new MCP client, call `workmine_start_here`. If you already know the task, call `find_workmine_tool`. Browsing and quoting do **not** purchase anything. A paid call is made only when an x402-aware buyer executes a priced endpoint and completes the payment challenge.
 
-## Что уже есть
+## Why agents use it
 
-- мобильная панель;
-- горячие сделки;
-- расчёт маржи;
-- база покупателей и поставщиков;
-- Telegram уведомления;
-- email outreach;
-- API;
-- Render Blueprint.
+WORKMINE focuses on low-cost deterministic operations that are useful inside automated pipelines: hashing, HMAC, encoding, JSON repair, text processing, HTML/PDF extraction, plus seller tooling for the x402 ecosystem. Prices start at **$0.001 USDC per call**.
 
-Источники заявок подключаются отдельными адаптерами; CAPTCHA, авторизация и ограничения сайтов не обходятся.
+## Revenue semantics
 
-## Render Free
+HTTP `402 Payment Required`, crawler probes, modeled billable amounts and directory listings are **not revenue**. WORKMINE recognizes revenue only after a confirmed settlement and emits a `WORKMINE_SETTLEMENT` event with the transaction identifier.
 
-На Free-инстансе локальная файловая система эфемерна и persistent disk недоступен. Поэтому SQLite используется как кэш: при старте DealFinder автоматически повторяет поиск и восстанавливает данные. Для постоянного хранения нужен платный persistent disk или внешняя БД.
+## Protocol
+
+- x402 v2
+- Base mainnet (`eip155:8453`)
+- USDC
+- non-custodial seller settlement
+- Streamable HTTP MCP
+
+See `workmine/README.md` for implementation details and limitations.

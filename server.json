@@ -2,8 +2,8 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.Tamerlan0606/workmine",
   "title": "WORKMINE",
-  "description": "x402 pay-per-call APIs over MCP, settled in USDC on Base for autonomous agents and developers.",
-  "version": "0.5.4",
+  "description": "Low-cost x402 pay-per-call utilities for AI agents: SHA hashing, HMAC, Base64/URL encoding, JSON repair, text/PDF extraction and x402 seller tooling. USDC on Base; calls from $0.001.",
+  "version": "0.5.5",
   "repository": {
     "url": "https://github.com/Tamerlan0606/Dealfinder",
     "source": "github",

@@ -1,1 +1,0 @@
-"""WORKMINE microservice farm."""
